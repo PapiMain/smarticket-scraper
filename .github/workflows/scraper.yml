@@ -23,8 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Install Chrome and ChromeDriver
+        run: sudo apt update && sudo apt install -y chromium-browser chromium-chromedriver
+
       - name: Run scraper
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
         run: |
-          python scripts/run_scraper.py
+          python run_scraper.py

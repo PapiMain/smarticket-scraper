@@ -11,6 +11,16 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
+SITES = {
+    "friends": {
+        "base_url": "https://friends.smarticket.co.il/",
+        "sheet_tab": "Friends"
+    },
+    "papi": {
+        "base_url": "https://papi.smarticket.co.il/",
+        "sheet_tab": "Papi"
+    },}
+
 
 def get_short_names():
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
@@ -24,6 +34,7 @@ def get_short_names():
     return [name for name in short_names if name and name != "שם מקוצר"]
 
 def get_driver():
+    
     options = Options()
     options.add_argument("--headless=new")  # ✅ use headless mode
     options.add_argument("--no-sandbox")
@@ -31,14 +42,13 @@ def get_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
 
-    service = Service()
+    service = Service(executable_path="/usr/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
 def scrape_site(site_config):
     base_url = site_config["base_url"]
     driver = get_driver()
-    driver.get(base_url)
     driver.get(base_url + "search")  # directly open the search page
 
     try:
@@ -79,3 +89,7 @@ def scrape_site(site_config):
         print(f"❌ Error while scraping {base_url}: {e}")
     finally:
         driver.quit()
+
+# Run daily scrapers
+for site in ["friends", "papi"]:
+    scrape_site(SITES[site])
