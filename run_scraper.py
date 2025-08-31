@@ -10,6 +10,7 @@ import os
 import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from urllib.parse import quote
 
 SITES = {
     "friends": {
@@ -48,42 +49,41 @@ def get_driver():
 
 def scrape_site(site_config):
     base_url = site_config["base_url"]
+    sheet_tab = site_config["sheet_tab"]
+    print(f"🌐 Starting scraper for site: {sheet_tab} ({base_url})")
+
     driver = get_driver()
-    driver.get(base_url + "search")  # directly open the search page
 
     try:
-        # Wait for search link and click it (backup if direct URL fails)
-        # search_link = WebDriverWait(driver, 10).until(
-        #     EC.element_to_be_clickable((By.ID, "search-link"))
-        # )
-        # search_link.click()
-
         # Load show names from Google Sheets
         short_names = get_short_names()
         print(f"🔎 Loaded {len(short_names)} short names")
 
-        for name in short_names[:5]:  # just test first 5 for now
+        for name in short_names[:5]:  # first 5 for testing
             print(f"➡️ Searching for: {name}")
 
-            # Find the input
-            search_input = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.ID, "q"))
-            )
-            # Clear old value and type new one
-            search_input.clear()
-            search_input.send_keys(name)
+            # Encode the show name for the URL
+            search_url = f"{base_url}search?q={quote(name)}"
+            
+            try:
+                driver.get(search_url)
 
-            # Submit by pressing Enter
-            search_input.send_keys(Keys.RETURN)
+                # Wait for results container to load
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, ".shows-list, .result-container"))
+                )
 
-            # Wait for results to load (TODO: find result container)
-            time.sleep(2)
+                print(f"✅ Finished search for: {name}")
+                print("🌍 Current URL:", driver.current_url)
 
-            print(f"✅ Finished search for: {name}")
-            print("🌍 Current URL:", driver.current_url)
-
-            # Optionally, navigate back to search page for next query
-            driver.get(base_url + "search")
+            except Exception as inner_e:
+                print(f"❌ Error on show '{name}': {inner_e}")
+                # Save a screenshot with the show name
+                safe_name = name.replace(" ", "_").replace("/", "_")
+                screenshot_path = f"screenshots/{sheet_tab}_{safe_name}.png"
+                os.makedirs("screenshots", exist_ok=True)
+                driver.save_screenshot(screenshot_path)
+                print(f"📸 Screenshot saved to: {screenshot_path}")
 
     except Exception as e:
         print(f"❌ Error while scraping {base_url}: {e}")
