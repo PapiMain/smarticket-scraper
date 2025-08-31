@@ -1,6 +1,11 @@
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+import time
 import os
 import json
 import gspread
@@ -29,3 +34,48 @@ def get_driver():
     service = Service()
     driver = webdriver.Chrome(service=service, options=options)
     return driver
+
+def scrape_site(site_config):
+    base_url = site_config["base_url"]
+    driver = get_driver()
+    driver.get(base_url)
+    driver.get(base_url + "search")  # directly open the search page
+
+    try:
+        # Wait for search link and click it (backup if direct URL fails)
+        # search_link = WebDriverWait(driver, 10).until(
+        #     EC.element_to_be_clickable((By.ID, "search-link"))
+        # )
+        # search_link.click()
+
+        # Load show names from Google Sheets
+        short_names = get_short_names()
+        print(f"🔎 Loaded {len(short_names)} short names")
+
+        for name in short_names[:5]:  # just test first 5 for now
+            print(f"➡️ Searching for: {name}")
+
+            # Find the input
+            search_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "q"))
+            )
+            # Clear old value and type new one
+            search_input.clear()
+            search_input.send_keys(name)
+
+            # Submit by pressing Enter
+            search_input.send_keys(Keys.RETURN)
+
+            # Wait for results to load (TODO: find result container)
+            time.sleep(2)
+
+            print(f"✅ Finished search for: {name}")
+            print("🌍 Current URL:", driver.current_url)
+
+            # Optionally, navigate back to search page for next query
+            driver.get(base_url + "search")
+
+    except Exception as e:
+        print(f"❌ Error while scraping {base_url}: {e}")
+    finally:
+        driver.quit()
