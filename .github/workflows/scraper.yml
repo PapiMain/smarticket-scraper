@@ -31,3 +31,9 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
         run: |
           python run_scraper.py
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v3
+        with:
+          name: smarticket-screenshots
+          path: screenshots/

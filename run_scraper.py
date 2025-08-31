@@ -22,7 +22,6 @@ SITES = {
         "sheet_tab": "Papi"
     },}
 
-
 def get_short_names():
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -64,7 +63,7 @@ def scrape_site(site_config):
 
             # Encode the show name for the URL
             search_url = f"{base_url}search?q={quote(name)}"
-            
+
             try:
                 driver.get(search_url)
 
