@@ -83,9 +83,8 @@ def wait_for_search_results(driver, timeout=15):
 
 # Check if current page is a CAPTCHA page
 def is_captcha_page(driver, name):
+    time.sleep(2)
     time=10
-    if "Just a moment" in driver.title or "hydrated" in driver.page_source:
-        time = 20  # longer wait for Cloudflare
 
     try:
         WebDriverWait(driver, time).until(
@@ -102,7 +101,7 @@ def is_captcha_page(driver, name):
         # Fallback: print current URL and a snippet of page source
         print("ℹ️ CAPTCHA not detected automatically.")
         print("🌍 Current page URL:", driver.current_url)
-        snippet = driver.page_source[:500]  # first 500 chars
+        snippet = driver.page_source[:2000]  # first 2000 chars
         print("📄 Page source snippet:\n", snippet)
 
         # Optionally save a screenshot
