@@ -42,6 +42,7 @@ HEBREW_MONTHS = {
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
+# Load Google Sheets credentials from environment variable
 def get_short_names():
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -53,6 +54,7 @@ def get_short_names():
     short_names = sheet.col_values(2)  # for example, if "שם מקוצר" is column B
     return [name for name in short_names if name and name != "שם מקוצר"]
 
+# Set up Selenium WebDriver
 def get_driver():
     options = Options()
     options.add_argument("--headless=new")
@@ -66,16 +68,37 @@ def get_driver():
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
+# Check if current page is a CAPTCHA page
 def is_captcha_page(driver):
     try:
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')] | //div[contains(@class,'cf-challenge')]"))
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located(
+                (By.XPATH,
+                 "//iframe[contains(@src,'recaptcha')] | "
+                 "//div[contains(@class,'cf-challenge')] | "
+                 "//div[contains(@class,'g-recaptcha')]")
+            )
         )
         print("⚠️ CAPTCHA detected!")
         return True
     except TimeoutException:
+        # Fallback: print current URL and a snippet of page source
+        print("ℹ️ CAPTCHA not detected automatically.")
+        print("🌍 Current page URL:", driver.current_url)
+        snippet = driver.page_source[:500]  # first 500 chars
+        print("📄 Page source snippet:\n", snippet)
+        # Optionally save a screenshot
+        os.makedirs("screenshots", exist_ok=True)
+        fallback_path = "screenshots/fallback_captcha_check.png"
+        driver.save_screenshot(fallback_path)
+        print(f"📸 Screenshot saved to: {fallback_path}")
+        return False
+    except Exception as e:
+        print(f"⚠️ Error detecting CAPTCHA: {e}")
         return False
 
+
+# Detect reCAPTCHA site key
 def get_recaptcha_site_key(driver):
     """
     Detects reCAPTCHA v2 site key dynamically from the page.
@@ -98,6 +121,7 @@ def get_recaptcha_site_key(driver):
     except TimeoutException:
         return None
 
+# Solve CAPTCHA using CapSolver
 def solve_captcha(site_url, site_key):
     """
     Uses CapSolver to solve reCAPTCHA v2 and return the token.
@@ -130,6 +154,7 @@ def solve_captcha(site_url, site_key):
             return token
     raise Exception("❌ CAPTCHA solving timed out")
 
+# Parse Hebrew date string
 def parse_hebrew_date(date_str):
     """
     Convert Hebrew date string like 'יום רביעי, 17 ספטמבר 2025' into 'dd/mm/yyyy'
@@ -154,7 +179,8 @@ def parse_hebrew_date(date_str):
     except Exception as e:
         print(f"⚠️ Failed to parse date '{date_str}': {e}")
         return date_str
-    
+
+# Extract show data from the current page
 def extract_shows(driver):
     shows = []
     # Wait until at least one show is present
@@ -170,10 +196,19 @@ def extract_shows(driver):
             show['url'] = el.get_attribute("href")
             show['name'] = el.find_element(By.CSS_SELECTOR, "h2").text.strip()
             show['hall'] = el.find_element(By.CSS_SELECTOR, ".theater_container").text.strip()
+
             raw_date = el.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
-            show['date'] = parse_hebrew_date(raw_date)
-            show['time'] = el.find_element(By.CSS_SELECTOR, ".time_container").text.strip()
-            
+            if raw_date:
+                show['date'] = parse_hebrew_date(raw_date)
+            else:
+                show['date'] = ""
+
+            raw_time = el.find_element(By.CSS_SELECTOR, ".time_container").text.strip()
+            # Remove any non-digit/colon prefix
+            import re
+            time_match = re.search(r"(\d{1,2}:\d{2})", raw_time)
+            show['time'] = time_match.group(1) if time_match else ""
+
             # Thumbnail image
             img_el = el.find_element(By.CSS_SELECTOR, ".pic img")
             show['thumbnail'] = img_el.get_attribute("src")
