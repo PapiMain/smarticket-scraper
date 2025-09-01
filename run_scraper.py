@@ -12,6 +12,8 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from urllib.parse import quote
 import requests
+from datetime import datetime
+
 
 SITES = {
     "friends": {
@@ -23,7 +25,22 @@ SITES = {
         "sheet_tab": "Papi"
     },}
 
-# CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
+HEBREW_MONTHS = {
+    "ינואר": 1,
+    "פברואר": 2,
+    "מרץ": 3,
+    "אפריל": 4,
+    "מאי": 5,
+    "יוני": 6,
+    "יולי": 7,
+    "אוגוסט": 8,
+    "ספטמבר": 9,
+    "אוקטובר": 10,
+    "נובמבר": 11,
+    "דצמבר": 12
+}
+
+CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
 def get_short_names():
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
@@ -113,6 +130,62 @@ def solve_captcha(site_url, site_key):
             return token
     raise Exception("❌ CAPTCHA solving timed out")
 
+def parse_hebrew_date(date_str):
+    """
+    Convert Hebrew date string like 'יום רביעי, 17 ספטמבר 2025' into 'dd/mm/yyyy'
+    """
+    try:
+        # Remove the day name and comma
+        parts = date_str.split(",")
+        if len(parts) == 2:
+            date_part = parts[1].strip()  # e.g., "17 ספטמבר 2025"
+        else:
+            date_part = date_str.strip()
+
+        day, month_name, year = date_part.split()
+        day = int(day)
+        month = HEBREW_MONTHS.get(month_name)
+        year = int(year)
+
+        if month:
+            return datetime(year, month, day).strftime("%d/%m/%Y")
+        else:
+            return date_str  # fallback if month not found
+    except Exception as e:
+        print(f"⚠️ Failed to parse date '{date_str}': {e}")
+        return date_str
+    
+def extract_shows(driver):
+    shows = []
+    # Wait until at least one show is present
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, "a.show"))
+    )
+    
+    show_elements = driver.find_elements(By.CSS_SELECTOR, "a.show")
+    
+    for el in show_elements:
+        try:
+            show = {}
+            show['url'] = el.get_attribute("href")
+            show['name'] = el.find_element(By.CSS_SELECTOR, "h2").text.strip()
+            show['hall'] = el.find_element(By.CSS_SELECTOR, ".theater_container").text.strip()
+            raw_date = el.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
+            show['date'] = parse_hebrew_date(raw_date)
+            show['time'] = el.find_element(By.CSS_SELECTOR, ".time_container").text.strip()
+            
+            # Thumbnail image
+            img_el = el.find_element(By.CSS_SELECTOR, ".pic img")
+            show['thumbnail'] = img_el.get_attribute("src")
+            
+            shows.append(show)
+        except Exception as e:
+            print(f"⚠️ Error extracting a show: {e}")
+            continue
+    
+    print(f"✅ Extracted {len(shows)} shows from page")
+    return shows
+
 def scrape_site(site_config):
     base_url = site_config["base_url"]
     sheet_tab = site_config["sheet_tab"]
@@ -136,7 +209,7 @@ def scrape_site(site_config):
 
                 if is_captcha_page(driver):
                     driver.save_screenshot("captcha.png")
-                    
+
                     # Even though you have an API key, skip solving until you have a balance
                     print(f"⚠️ CAPTCHA detected on {sheet_tab}, skipping until API key has funds")
                     continue  # skip this search term
@@ -159,6 +232,11 @@ def scrape_site(site_config):
 
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
+
+                all_shows = extract_shows(driver)
+                for s in all_shows:
+                    print(s)
+
 
             except Exception as inner_e:
                 print(f"❌ Error on show '{name}': {inner_e}")
