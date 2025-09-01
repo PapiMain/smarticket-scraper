@@ -78,65 +78,28 @@ def save_debug(driver, show_name, suffix):
 
 # Check if current page is a CAPTCHA page
 def is_captcha_page(driver, show_name="unknown"):
-    for i in range(10):  # check up to 10 seconds
-        print(f"🔎 Checking for captcha... attempt {i+1}/10")
+    html = driver.page_source.lower()
+    title = driver.title.lower()
 
-        html = driver.page_source.lower()
-        title = driver.title
+    # Detect real captcha indicators
+    if ("iframe" in html and "recaptcha" in html) or \
+       "g-recaptcha" in html or \
+       "cf-challenge" in html or \
+       "verifying" in html:
+        print(f"⚠️ CAPTCHA elements detected for '{show_name}'")
+        print("ℹ️ Page title:", title)
+        print("ℹ️ First 500 chars of HTML:", html[:500])
+        save_debug(driver, show_name, "captcha")
+        return True
 
-        # Detect real captcha indicators
-        if ("iframe" in html and "recaptcha" in html) or \
-           "g-recaptcha" in html or \
-           "cf-challenge" in html or \
-           "verifying" in html:
-            print(f"⚠️ CAPTCHA elements detected for '{show_name}' at {i+1}s")
-            print("ℹ️ Page title:", title)
-            print("ℹ️ First 500 chars of HTML:", html[:500])
-            save_debug(driver, show_name, f"captcha_{i+1}")
-            return True
+    # Quick check: Cloudflare interstitial
+    if "just a moment" in title:
+        print(f"⏳ Cloudflare interstitial detected (not necessarily captcha) for '{show_name}'")
+        save_debug(driver, show_name, "cf_interstitial")
+        return False
 
-        # Extra: Cloudflare interstitial page (not always captcha)
-        if "just a moment" in title.lower():
-            print(f"⏳ Cloudflare interstitial detected (not necessarily captcha) at {i+1}s")
-            print("ℹ️ Page title:", title)
-            print("ℹ️ First 500 chars of HTML:", html[:500])
-            save_debug(driver, show_name, f"cf_interstitial_{i+1}")
-            # don’t return yet → keep looping to see if it changes
-
-        # Save snapshot each second for debugging
-        save_debug(driver, show_name, f"debug_{i+1}")
-
-        time.sleep(1)
-    print(f"✅ No CAPTCHA detected for '{show_name}' after 10s")
+    print(f"✅ No CAPTCHA detected for '{show_name}'")
     return False
-    
-    # try:
-    #     # Quick check: Cloudflare interstitial
-    #     if "Just a moment" in driver.title or "cf-challenge" in driver.page_source:
-    #         print(f"⚠️ CAPTCHA/Cloudflare detected immediately for '{show_name}'")
-    #         print("ℹ️ Page title:", driver.title)
-    #         print("ℹ️ First 500 chars of HTML:", driver.page_source[:500])
-    #         save_debug(driver, show_name, "captcha")
-    #         return True
-
-    #     # Try to wait for explicit recaptcha/challenge elements
-    #     WebDriverWait(driver, 8).until(
-    #         EC.presence_of_element_located(
-    #             (By.XPATH,
-    #              "//iframe[contains(@src,'recaptcha')] | "
-    #              "//div[contains(@class,'cf-challenge')] | "
-    #              "//div[contains(@class,'g-recaptcha')]")
-    #         )
-    #     )
-    #     print(f"⚠️ CAPTCHA elements detected for '{show_name}'")
-    #     print("ℹ️ Page title:", driver.title)
-    #     print("ℹ️ First 500 chars of HTML:", driver.page_source[:500])
-    #     save_debug(driver, show_name, "captcha")
-    #     return True
-
-    # except TimeoutException:
-    #     print(f"ℹ️ No CAPTCHA detected for '{show_name}'")
-    #     return False
 
 # Detect reCAPTCHA site key
 def get_recaptcha_site_key(driver):
@@ -273,7 +236,7 @@ def scrape_site(site_config):
         short_names = get_short_names()
         print(f"🔎 Loaded {len(short_names)} short names")
 
-        for name in short_names[:1]:  # first 5 for testing
+        for name in short_names[:5]:  # first 5 for testing
             print(f"➡️ Searching for: {name}")
 
             # Encode the show name for the URL
@@ -289,7 +252,6 @@ def scrape_site(site_config):
 
                     # Even though you have an API key, skip solving until you have a balance
                     print(f"⚠️ CAPTCHA detected on {sheet_tab}, skipping until API key has funds")
-                    print("ℹ️ First 500 chars of HTML after detection:", driver.page_source[:500])
                     continue  # skip this search term
 
                     site_key = get_recaptcha_site_key(driver)
