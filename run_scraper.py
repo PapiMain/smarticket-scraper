@@ -198,7 +198,7 @@ def extract_shows(driver, name="unknown"):
         try:
             show = {}
             show['url'] = el.get_attribute("href")
-            show['name'] = el.find_element(By.CSS_SELECTOR, "h2[id^='show_theater_name_']").text.strip()
+            show['name'] = el.find_element(By.CSS_SELECTOR, "h2").text.strip()
             show['hall'] = el.find_element(By.CSS_SELECTOR, ".theater_container").text.strip()
 
             raw_date = el.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
@@ -239,7 +239,7 @@ def count_empty_seats(driver):
         print(f"❌ Error counting empty seats: {e}")
         return 0
 
-def update_sheet_with_shows(show):
+def update_sheet_with_shows(show, site_tab):
     """Update Google Sheet with available seats for a show."""
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -256,6 +256,10 @@ def update_sheet_with_shows(show):
     scraped_date = datetime.strptime(show["date"], "%d/%m/%Y").date()
     israel_tz = pytz.timezone("Asia/Jerusalem")
     now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M:%S')
+
+    # Determine the organization based on site
+    org_map = {"Papi": "סמארטיקט", "Friends": "פרינדס"}
+    org_value = org_map.get(site_tab, "")
 
     updated = False
 
@@ -274,7 +278,7 @@ def update_sheet_with_shows(show):
             title_match = (show["name"].strip() in row["הפקה"].strip()
                            or row["הפקה"].strip() in show["name"].strip())
 
-            if title_match and row_date == scraped_date:
+            if title_match and row_date == scraped_date and row["ארגון"].strip() == org_value:
                 # Update sold or available seats
                 sold = int(row.get("קיבלו", 0)) - int(show.get("available_seats", 0))
                 sheet.update_cell(i, available_col, sold)
@@ -348,7 +352,7 @@ def scrape_site(site_config):
                             s["available_seats"] = available
                             print(f"🎫 Available seats for {s['name']} on {s['date']}: {available}")
                             # Update Google Sheet
-                            update_sheet_with_shows(s)
+                            update_sheet_with_shows(s, sheet_tab)
 
                         except Exception as seat_e:
                             print(f"❌ Error fetching seats for {s['name']}: {seat_e}")
