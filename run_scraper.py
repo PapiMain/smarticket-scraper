@@ -68,22 +68,6 @@ def get_driver():
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
-# Wait for search results to load
-def wait_for_search_results(driver, timeout=15):
-    try:
-        WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "a.show.event"))
-        )
-        print("✅ Search results loaded")
-        return True
-    except TimeoutException:
-        print("⚠️ Search results did not load in time")
-        print("ℹ️ Page title:", driver.title)
-        print("ℹ️ First 500 chars of HTML:", driver.page_source[:500])
-        driver.save_screenshot("screenshots/debug_wait.png")
-
-        return False
-
 # Check if current page is a CAPTCHA page
 def is_captcha_page(driver, show_name="unknown"):
     try:
@@ -273,6 +257,7 @@ def scrape_site(site_config):
 
                     # Even though you have an API key, skip solving until you have a balance
                     print(f"⚠️ CAPTCHA detected on {sheet_tab}, skipping until API key has funds")
+                    print("ℹ️ First 500 chars of HTML after detection:", driver.page_source[:500])
                     continue  # skip this search term
 
                     site_key = get_recaptcha_site_key(driver)
@@ -285,12 +270,7 @@ def scrape_site(site_config):
                     else:
                         print("❌ Could not detect site key, skipping CAPTCHA")
                         return
-
-                results_loaded = wait_for_search_results(driver)
-                if not results_loaded:
-                    print(f"⚠️ No search results loaded for '{name}', saving page for debug")
-                    continue
-
+                
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
 
