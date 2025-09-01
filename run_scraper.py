@@ -198,7 +198,7 @@ def extract_shows(driver, name="unknown"):
         try:
             show = {}
             show['url'] = el.get_attribute("href")
-            show['name'] = el.find_element(By.CSS_SELECTOR, ".some_selector_for_name").text.strip()
+            show['name'] = el.find_element(By.CSS_SELECTOR, "h2[id^='show_theater_name_']").text.strip()
             show['hall'] = el.find_element(By.CSS_SELECTOR, ".theater_container").text.strip()
 
             raw_date = el.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
