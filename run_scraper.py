@@ -68,23 +68,23 @@ def get_driver():
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
-# might delete doesnt work
-# def wait_for_search_results(driver, timeout=15):
-#     try:
-#         # Wait until the search results container appears
-#         WebDriverWait(driver, timeout).until(
-#             EC.presence_of_element_located((By.CSS_SELECTOR, "a.show.event, div.show-list, .search-result"))
-#         )
-#         print("✅ Search results loaded")
-#         return True
-#     except TimeoutException:
-#         print("⚠️ Search results did not load in time")
-#         return False
+# Wait for search results to load
+def wait_for_search_results(driver, timeout=15):
+    try:
+        # Wait until the search results container appears
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a.show.event, div.show-list, .search-result"))
+        )
+        print("✅ Search results loaded")
+        return True
+    except TimeoutException:
+        print("⚠️ Search results did not load in time")
+        return False
 
 # Check if current page is a CAPTCHA page
 def is_captcha_page(driver, name):
     time=10
-    if "Just a moment" in driver.title:
+    if "Just a moment" in driver.title or "hydrated" in driver.page_source:
         time = 20  # longer wait for Cloudflare
 
     try:
@@ -263,7 +263,6 @@ def scrape_site(site_config):
                 driver.get(search_url)
 
                 is_captcha = is_captcha_page(driver, name)
-                # results_loaded = wait_for_search_results(driver)
 
                 if is_captcha:
                     driver.save_screenshot("captcha.png")
@@ -283,15 +282,10 @@ def scrape_site(site_config):
                         print("❌ Could not detect site key, skipping CAPTCHA")
                         return
 
-                # if not results_loaded:
-                #     print(f"⚠️ No search results loaded for '{name}', saving page for debug")
-                #     safe_name = name.replace(" ", "_").replace("/", "_")
-                #     driver.save_screenshot(f"screenshots/{sheet_tab}_{safe_name}_noresults.png")
-                #     continue
-                # Wait until at least one show <a> is present
-                # WebDriverWait(driver, 10).until(
-                #     EC.presence_of_element_located((By.CSS_SELECTOR, "a.show.event"))
-                # )
+                results_loaded = wait_for_search_results(driver)
+                if not results_loaded:
+                    print(f"⚠️ No search results loaded for '{name}', saving page for debug")
+                    continue
 
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
