@@ -71,22 +71,32 @@ def get_driver():
 # Wait for search results to load
 def wait_for_search_results(driver, timeout=15):
     try:
-        # Wait until the search results container appears
         WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "a.show.event, div.show-list, .search-result"))
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a.show.event"))
         )
         print("✅ Search results loaded")
         return True
     except TimeoutException:
         print("⚠️ Search results did not load in time")
+        print("ℹ️ Page title:", driver.title)
+        print("ℹ️ First 500 chars of HTML:", driver.page_source[:500])
+        driver.save_screenshot("screenshots/debug_wait.png")
+
         return False
 
 # Check if current page is a CAPTCHA page
-def is_captcha_page(driver, name):
-    time.sleep(2)
-    
+def is_captcha_page(driver, show_name="unknown"):
     try:
-        WebDriverWait(driver, 10).until(
+        # Quick check: Cloudflare interstitial
+        if "Just a moment" in driver.title or "cf-challenge" in driver.page_source:
+            print(f"⚠️ CAPTCHA/Cloudflare detected immediately for '{show_name}'")
+            print("ℹ️ Page title:", driver.title)
+            print("ℹ️ First 500 chars of HTML:", driver.page_source[:500])
+            save_debug(driver, show_name, "captcha")
+            return True
+
+        # Try to wait for explicit recaptcha/challenge elements
+        WebDriverWait(driver, 8).until(
             EC.presence_of_element_located(
                 (By.XPATH,
                  "//iframe[contains(@src,'recaptcha')] | "
@@ -94,27 +104,22 @@ def is_captcha_page(driver, name):
                  "//div[contains(@class,'g-recaptcha')]")
             )
         )
-        print("⚠️ CAPTCHA detected!")
+        print(f"⚠️ CAPTCHA elements detected for '{show_name}'")
+        print("ℹ️ Page title:", driver.title)
+        print("ℹ️ First 500 chars of HTML:", driver.page_source[:500])
+        save_debug(driver, show_name, "captcha")
         return True
+
     except TimeoutException:
-        # Fallback: print current URL and a snippet of page source
-        print("ℹ️ CAPTCHA not detected automatically.")
-        print("🌍 Current page URL:", driver.current_url)
-        snippet = driver.page_source[:2000]  # first 2000 chars
-        print("📄 Page source snippet:\n", snippet)
-
-        # Optionally save a screenshot
-        os.makedirs("screenshots", exist_ok=True)
-        safe_name = name.replace(" ", "_").replace("/", "_")
-        timestamp = int(time.time())
-        fallback_path = f"screenshots/fallback_{safe_name}_{timestamp}.png"
-        driver.save_screenshot(fallback_path)
-        print(f"📸 Screenshot saved to: {fallback_path}")
-
+        print(f"ℹ️ No CAPTCHA detected for '{show_name}'")
         return False
-    except Exception as e:
-        print(f"⚠️ Error detecting CAPTCHA: {e}")
-        return False
+
+def save_debug(driver, show_name, suffix):
+    safe_name = show_name.replace(" ", "_").replace("/", "_")
+    os.makedirs("screenshots", exist_ok=True)
+    path = f"screenshots/{safe_name}_{suffix}_{int(time.time())}.png"
+    driver.save_screenshot(path)
+    print(f"📸 Screenshot saved: {path}")
 
 # Detect reCAPTCHA site key
 def get_recaptcha_site_key(driver):
@@ -259,6 +264,7 @@ def scrape_site(site_config):
 
             try:
                 driver.get(search_url)
+                time.sleep(2)  # wait a bit for page to start loading
 
                 is_captcha = is_captcha_page(driver, name)
 
@@ -297,11 +303,7 @@ def scrape_site(site_config):
             except Exception as inner_e:
                 print(f"❌ Error on show '{name}': {inner_e}")
                 # Save a screenshot with the show name
-                safe_name = name.replace(" ", "_").replace("/", "_")
-                screenshot_path = f"screenshots/{sheet_tab}_{safe_name}.png"
-                os.makedirs("screenshots", exist_ok=True)
-                driver.save_screenshot(screenshot_path)
-                print(f"📸 Screenshot saved to: {screenshot_path}")
+                save_debug(driver, name, "captcha")
 
     except Exception as e:
         print(f"❌ Error while scraping {base_url}: {e}")
