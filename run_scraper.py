@@ -68,6 +68,14 @@ def get_driver():
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
+# Save screenshot for debugging
+def save_debug(driver, show_name, suffix):
+    safe_name = show_name.replace(" ", "_").replace("/", "_")
+    os.makedirs("screenshots", exist_ok=True)
+    path = f"screenshots/{safe_name}_{suffix}_{int(time.time())}.png"
+    driver.save_screenshot(path)
+    print(f"📸 Screenshot saved: {path}")
+
 # Check if current page is a CAPTCHA page
 def is_captcha_page(driver, show_name="unknown"):
     try:
@@ -97,13 +105,6 @@ def is_captcha_page(driver, show_name="unknown"):
     except TimeoutException:
         print(f"ℹ️ No CAPTCHA detected for '{show_name}'")
         return False
-
-def save_debug(driver, show_name, suffix):
-    safe_name = show_name.replace(" ", "_").replace("/", "_")
-    os.makedirs("screenshots", exist_ok=True)
-    path = f"screenshots/{safe_name}_{suffix}_{int(time.time())}.png"
-    driver.save_screenshot(path)
-    print(f"📸 Screenshot saved: {path}")
 
 # Detect reCAPTCHA site key
 def get_recaptcha_site_key(driver):
@@ -248,7 +249,6 @@ def scrape_site(site_config):
 
             try:
                 driver.get(search_url)
-                time.sleep(2)  # wait a bit for page to start loading
 
                 is_captcha = is_captcha_page(driver, name)
 
