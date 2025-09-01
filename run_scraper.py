@@ -13,6 +13,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 from urllib.parse import quote
 import requests
 from datetime import datetime
+import pytz
 
 
 SITES = {
@@ -184,7 +185,7 @@ def parse_hebrew_date(date_str):
         return date_str
 
 # Extract show data from the current page
-def extract_shows(driver):
+def extract_shows(driver, name="unknown"):
     shows = []
     # Wait until at least one show is present
     WebDriverWait(driver, 10).until(
@@ -197,7 +198,7 @@ def extract_shows(driver):
         try:
             show = {}
             show['url'] = el.get_attribute("href")
-            show['name'] = el.find_element(By.CSS_SELECTOR, "h2").text.strip()
+            show['name'] = name
             show['hall'] = el.find_element(By.CSS_SELECTOR, ".theater_container").text.strip()
 
             raw_date = el.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
@@ -224,6 +225,7 @@ def extract_shows(driver):
     print(f"✅ Extracted {len(shows)} shows from page")
     return shows
 
+# Count empty seats in the chair_map table
 def count_empty_seats(driver):
     """Count the number of empty seats in the chair_map table."""
     try:
@@ -236,6 +238,56 @@ def count_empty_seats(driver):
     except Exception as e:
         print(f"❌ Error counting empty seats: {e}")
         return 0
+
+def update_sheet_with_shows(show):
+    """Update Google Sheet with available seats for a show."""
+    service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+    client = gspread.authorize(creds)
+
+    sheet = client.open("דאטה אפשיט אופיס").worksheet("כרטיסים")
+    data = sheet.get_all_records()
+    headers = sheet.row_values(1)
+
+    available_col = headers.index("נמכרו") + 1  # Or whichever column you want to update
+    updated_col = headers.index("עודכן לאחרונה") + 1
+
+    scraped_date = datetime.strptime(show["date"], "%d/%m/%Y").date()
+    israel_tz = pytz.timezone("Asia/Jerusalem")
+    now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M:%S')
+
+    updated = False
+
+    for i, row in enumerate(data, start=2):  # row 1 = headers
+        try:
+            row_date = row["תאריך"]
+            if isinstance(row_date, str):
+                try:
+                    row_date = datetime.strptime(row_date, "%d/%m/%Y").date()
+                except:
+                    continue
+            elif isinstance(row_date, datetime):
+                row_date = row_date.date()
+
+            # Flexible title matching
+            title_match = (show["name"].strip() in row["הפקה"].strip()
+                           or row["הפקה"].strip() in show["name"].strip())
+
+            if title_match and row_date == scraped_date:
+                # Update sold or available seats
+                sold = int(row.get("קיבלו", 0)) - int(show.get("available_seats", 0))
+                sheet.update_cell(i, available_col, sold)
+                sheet.update_cell(i, updated_col, now_israel)
+                updated = True
+                print(f"✅ Updated row {i}: {show['name']} - Sold = {sold}")
+                break
+
+        except Exception as e:
+            print(f"⚠️ Error parsing row {i}: {e}")
+
+    if not updated:
+        print(f"❌ No matching row found for {show['name']} on {show['date']}")
 
 def scrape_site(site_config):
     base_url = site_config["base_url"]
@@ -281,7 +333,7 @@ def scrape_site(site_config):
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
 
-                all_shows = extract_shows(driver)
+                all_shows = extract_shows(driver, name)
                 print(f"ℹ️ Extracted {len(all_shows)} shows for {name}")
                 for s in all_shows:
                     print(s)
@@ -295,6 +347,8 @@ def scrape_site(site_config):
                             available = count_empty_seats(driver)
                             s["available_seats"] = available
                             print(f"🎫 Available seats for {s['name']} on {s['date']}: {available}")
+                            # Update Google Sheet
+                            update_sheet_with_shows(s)
 
                         except Exception as seat_e:
                             print(f"❌ Error fetching seats for {s['name']}: {seat_e}")
