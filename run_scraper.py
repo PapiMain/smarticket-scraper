@@ -68,10 +68,26 @@ def get_driver():
     driver = webdriver.Chrome(service=service, options=options)
     return driver
 
-# Check if current page is a CAPTCHA page
-def is_captcha_page(driver):
+def wait_for_search_results(driver, timeout=15):
     try:
-        WebDriverWait(driver, 10).until(
+        # Wait until the search results container appears
+        WebDriverWait(driver, timeout).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a.show.event, div.show-list, .search-result"))
+        )
+        print("✅ Search results loaded")
+        return True
+    except TimeoutException:
+        print("⚠️ Search results did not load in time")
+        return False
+
+# Check if current page is a CAPTCHA page
+def is_captcha_page(driver, name):
+    time=10
+    if "Just a moment" in driver.title:
+        time = 20  # longer wait for Cloudflare
+
+    try:
+        WebDriverWait(driver, time).until(
             EC.presence_of_element_located(
                 (By.XPATH,
                  "//iframe[contains(@src,'recaptcha')] | "
@@ -87,16 +103,19 @@ def is_captcha_page(driver):
         print("🌍 Current page URL:", driver.current_url)
         snippet = driver.page_source[:500]  # first 500 chars
         print("📄 Page source snippet:\n", snippet)
+
         # Optionally save a screenshot
         os.makedirs("screenshots", exist_ok=True)
-        fallback_path = "screenshots/fallback_captcha_check.png"
+        safe_name = name.replace(" ", "_").replace("/", "_")
+        timestamp = int(time.time())
+        fallback_path = f"screenshots/fallback_{safe_name}_{timestamp}.png"
         driver.save_screenshot(fallback_path)
         print(f"📸 Screenshot saved to: {fallback_path}")
+
         return False
     except Exception as e:
         print(f"⚠️ Error detecting CAPTCHA: {e}")
         return False
-
 
 # Detect reCAPTCHA site key
 def get_recaptcha_site_key(driver):
@@ -242,7 +261,16 @@ def scrape_site(site_config):
             try:
                 driver.get(search_url)
 
-                if is_captcha_page(driver):
+                is_captcha = is_captcha_page(driver, name)
+                results_loaded = wait_for_search_results(driver)
+                if not results_loaded:
+                    print(f"⚠️ No search results loaded for '{name}', saving page for debug")
+                    safe_name = name.replace(" ", "_").replace("/", "_")
+                    driver.save_screenshot(f"screenshots/{sheet_tab}_{safe_name}_noresults.png")
+                    continue
+
+
+                if is_captcha:
                     driver.save_screenshot("captcha.png")
 
                     # Even though you have an API key, skip solving until you have a balance
@@ -269,6 +297,7 @@ def scrape_site(site_config):
                 print("🌍 Current URL:", driver.current_url)
 
                 all_shows = extract_shows(driver)
+                print(f"ℹ️ Extracted {len(all_shows)} shows for {name}")
                 for s in all_shows:
                     print(s)
 
