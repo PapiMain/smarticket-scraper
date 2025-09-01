@@ -24,7 +24,9 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install Chrome and ChromeDriver
-        run: sudo apt update && sudo apt install -y chromium-browser chromium-chromedriver
+        run: |
+          sudo apt update
+          sudo apt install -y chromium-browser chromium-chromedriver
 
       - name: Run scraper
         env:
