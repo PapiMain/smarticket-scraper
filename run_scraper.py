@@ -224,6 +224,19 @@ def extract_shows(driver):
     print(f"✅ Extracted {len(shows)} shows from page")
     return shows
 
+def count_empty_seats(driver):
+    """Count the number of empty seats in the chair_map table."""
+    try:
+        # Wait until the table is loaded
+        WebDriverWait(driver, 10).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, "table.chair_map td a.chair.empty")
+        )
+        empty_seats = driver.find_elements(By.CSS_SELECTOR, "table.chair_map td a.chair.empty")
+        return len(empty_seats)
+    except Exception as e:
+        print(f"❌ Error counting empty seats: {e}")
+        return 0
+
 def scrape_site(site_config):
     base_url = site_config["base_url"]
     sheet_tab = site_config["sheet_tab"]
@@ -273,6 +286,19 @@ def scrape_site(site_config):
                 for s in all_shows:
                     print(s)
 
+                    if s.get("url"):
+                        try:
+                            driver.get(s["url"])
+                            # Optional: wait for the page / table to fully load
+                            time.sleep(2)
+
+                            available = count_empty_seats(driver)
+                            s["available_seats"] = available
+                            print(f"🎫 Available seats for {s['name']} on {s['date']}: {available}")
+
+                        except Exception as seat_e:
+                            print(f"❌ Error fetching seats for {s['name']}: {seat_e}")
+                            s["available_seats"] = None
 
             except Exception as inner_e:
                 print(f"❌ Error on show '{name}': {inner_e}")
