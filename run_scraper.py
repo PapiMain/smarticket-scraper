@@ -84,10 +84,9 @@ def wait_for_search_results(driver, timeout=15):
 # Check if current page is a CAPTCHA page
 def is_captcha_page(driver, name):
     time.sleep(2)
-    time=10
-
+    
     try:
-        WebDriverWait(driver, time).until(
+        WebDriverWait(driver, 10).until(
             EC.presence_of_element_located(
                 (By.XPATH,
                  "//iframe[contains(@src,'recaptcha')] | "
