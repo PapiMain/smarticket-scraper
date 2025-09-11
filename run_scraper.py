@@ -208,20 +208,15 @@ def extract_show_details(driver, url):
         # Title
         show["name"] = container.find_element(By.CSS_SELECTOR, "h1").text.strip()
 
-        # Hall + City (split by comma if needed) change to only hall
-        show["hall"] = container.find_element(By.CSS_SELECTOR, ".theater").text.strip()
-        # if "," in hall_city:
-        #     hall, city = [p.strip() for p in hall_city.split(",", 1)]
-        # else:
-        #     hall, city = hall_city, ""
-        # show["hall"] = hall
-        # show["city"] = city
+        # Hall (remove "מפת הגעה")
+        hall_text = container.find_element(By.CSS_SELECTOR, ".theater").text.strip()
+        show["hall"] = hall_text.replace("(מפת הגעה)", "").strip()
 
         # Date
         raw_date = container.find_element(By.CSS_SELECTOR, ".event-date").text.strip()
-        show["date"] = parse_hebrew_date(raw_date)
+        show["date"] = parse_hebrew_date(raw_date)  # stays only date
 
-        # Time
+        # Time (clean string, keep only time)
         raw_time = container.find_element(By.CSS_SELECTOR, ".event-time").text.strip()
         show["time"] = raw_time.replace("בשעה", "").strip()
 
@@ -232,62 +227,15 @@ def extract_show_details(driver, url):
         except:
             show["price"] = ""
 
-        # Duration (optional)
-        # try:
-        #     duration_text = container.find_element(By.CSS_SELECTOR, ".show_duration").text.strip()
-        #     show["duration"] = duration_text
-        # except:
-        #     show["duration"] = ""
-
-        print(f"🎭 Extracted show: {show['name']} {show['hall']} ({show['date']} {show['time']}) {show['price']}")
-        
+        print(
+            f"🎭 Extracted show: {show['name']} - {show['hall']} "
+            f"({show['date']} | {show['time']}) - {show['price']}"
+        )        
 
     except Exception as e:
         print(f"❌ Failed to extract show from {url}: {e}")
 
     return show
-
-# Extract show data from the current page
-# def extract_shows(driver, name="unknown"):
-    # shows = []
-    # # Wait until at least one show is present
-    # WebDriverWait(driver, 10).until(
-    #     EC.presence_of_element_located((By.CSS_SELECTOR, "a.show"))
-    # )
-    
-    # show_elements = driver.find_elements(By.CSS_SELECTOR, "a.show")
-    
-    # for el in show_elements:
-        # try:
-        #     show = {}
-        #     show['url'] = el.get_attribute("href")
-            # show['name'] = el.find_element(By.CSS_SELECTOR, "h2").text.strip()
-            # show['hall'] = el.find_element(By.CSS_SELECTOR, ".theater_container").text.strip()
-
-            # raw_date = el.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
-            # if raw_date:
-            #     show['date'] = parse_hebrew_date(raw_date)
-            # else:
-            #     show['date'] = ""
-
-            # raw_time = el.find_element(By.CSS_SELECTOR, ".time_container").text.strip()
-
-            # Remove any non-digit/colon prefix
-            # import re
-            # time_match = re.search(r"(\d{1,2}:\d{2})", raw_time)
-            # show['time'] = time_match.group(1) if time_match else ""
-
-            # Thumbnail image
-            # img_el = el.find_element(By.CSS_SELECTOR, ".pic img")
-            # show['thumbnail'] = img_el.get_attribute("src")
-            
-            # shows.append(show)
-    #     except Exception as e:
-    #         print(f"⚠️ Error extracting a show: {e}")
-    #         continue
-    
-    # print(f"✅ Extracted {len(shows)} shows from page")
-    # return shows
 
 # Count empty seats in the chair_map table
 def count_empty_seats(driver):
@@ -415,28 +363,6 @@ def scrape_site(site_config):
                     except Exception as seat_e:
                         print(f"❌ Error counting seats for {show.get('name','?')}: {seat_e}")
                         show["available_seats"] = None
-
-
-                # all_shows = extract_shows(driver, name)
-                # print(f"ℹ️ Extracted {len(all_shows)} shows for {name}")
-                # for s in all_shows:
-                #     print(s)
-
-                #     if s.get("url"):
-                #         try:
-                #             driver.get(s["url"])
-                #             # Optional: wait for the page / table to fully load
-                #             time.sleep(2)
-
-                #             available = count_empty_seats(driver)
-                #             s["available_seats"] = available
-                #             print(f"🎫 Available seats for {s['name']} on {s['date']}: {available}")
-                #             # Update Google Sheet
-                #             update_sheet_with_shows(s, sheet_tab)
-
-                #         except Exception as seat_e:
-                #             print(f"❌ Error fetching seats for {s['name']}: {seat_e}")
-                #             s["available_seats"] = None
 
             except Exception as inner_e:
                 print(f"❌ Error on show '{name}': {inner_e}")
