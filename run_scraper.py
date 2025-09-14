@@ -329,22 +329,137 @@ def scrape_site(site_config):
                 is_captcha = is_captcha_page(driver, name)
 
                 if is_captcha:
-                    driver.save_screenshot("captcha.png")
+                     # helpful local helper names
+                    safe_name = name.replace(" ", "_").replace("/", "_")
+                    timestamp = int(time.time())
 
-                    # Even though you have an API key, skip solving until you have a balance
-                    print(f"⚠️ CAPTCHA detected on {sheet_tab}, skipping until API key has funds")
-                    continue  # skip this search term
+                    # Save a "before" screenshot and HTML snapshot
+                    try:
+                        save_debug(driver, name, "before_captcha")
+                        html_path = f"screenshots/{safe_name}_before_{timestamp}.html"
+                        with open(html_path, "w", encoding="utf-8") as f:
+                            f.write(driver.page_source)
+                        print(f"💾 Saved HTML snapshot: {html_path}")
+                    except Exception as e:
+                        print(f"⚠️ Failed to save before-snapshot: {e}")
 
                     site_key = get_recaptcha_site_key(driver)
-                    if site_key:
+                    print(f"🔍 Site key detection result: {site_key}")
+
+                    if not site_key:
+                        # Extra detection hints to help debug (Turnstile/hCaptcha detection)
+                        page_snippet = driver.page_source[:2000].lower()
+                        if "turnstile" in page_snippet:
+                            print("ℹ️ Page contains 'turnstile' - could be Cloudflare Turnstile challenge.")
+                        if "hcaptcha" in page_snippet or "h-captcha" in page_snippet:
+                            print("ℹ️ Page contains 'hcaptcha' - could be hCaptcha.")
+                        print("❌ Could not detect a reCAPTCHA site key - saving snapshot and skipping this term.")
+                        # Save another snapshot flagged for missing key
+                        try:
+                            save_debug(driver, name, "no_site_key")
+                            with open(f"screenshots/{safe_name}_no_site_key_{timestamp}.html", "w", encoding="utf-8") as f:
+                                f.write(driver.page_source)
+                        except:
+                            pass
+                        continue
+                    try:
+                         # Solve captcha via your existing solve_captcha()
                         token = solve_captcha(driver.current_url, site_key)
-                        # Inject token into page
-                        driver.execute_script(f'document.getElementById("g-recaptcha-response").innerHTML = "{token}";')
-                        driver.execute_script('___grecaptcha_cfg.clients[0].callback("{token}");')  # trigger callback if needed
-                        time.sleep(2)
-                    else:
-                        print("❌ Could not detect site key, skipping CAPTCHA")
-                        return
+                        print(f"🧩 Received token (start): {token[:40]}...")
+
+                        # Take screenshot immediately before injection (extra safety)
+                        save_debug(driver, name, "before_injection")
+
+                        # Make sure the g-recaptcha-response element exists; if not, create it.
+                        try:
+                            exists = driver.execute_script('return !!document.getElementById("g-recaptcha-response");')
+                            if not exists:
+                                # create a hidden textarea to hold the token (some sites require it)
+                                driver.execute_script(
+                                    'var t=document.createElement("textarea");'
+                                    't.id="g-recaptcha-response"; t.style.display="none";'
+                                    'document.body.appendChild(t);'
+                                )
+                                print("ℹ️ Created missing g-recaptcha-response textarea in DOM.")
+                        except Exception as e:
+                            print(f"⚠️ Could not check/create g-recaptcha-response element: {e}")
+
+                        # Inject solved token
+                        try:
+                            driver.execute_script(
+                                'document.getElementById("g-recaptcha-response").style.display = "block";'
+                            )
+                            driver.execute_script(
+                                f'document.getElementById("g-recaptcha-response").value = "{token}";'
+                            )
+                            print("📝 Injected token into g-recaptcha-response element.")
+                        except Exception as e:
+                            print(f"❌ Failed injecting token into g-recaptcha-response: {e}")
+                            save_debug(driver, name, "inject_failed")
+                            # still attempt to continue to give more info
+
+                        # Verify the token got set
+                        try:
+                            set_val = driver.execute_script('return document.getElementById("g-recaptcha-response").value;')
+                            print(f"✅ g-recaptcha-response now set (start): {set_val[:40] if set_val else 'EMPTY'}")
+                        except Exception as e:
+                            print(f"⚠️ Could not read g-recaptcha-response value after injection: {e}")
+
+                        # Check for a form to submit and submit it if present
+                        try:
+                            form_exists = driver.execute_script('return !!document.getElementById("captcha-form");')
+                            print(f"📂 captcha-form exists: {form_exists}")
+                            if form_exists:
+                                try:
+                                    driver.execute_script('document.getElementById("captcha-form").submit();')
+                                    print("📤 Submitted captcha-form.")
+                                except Exception as e:
+                                    print(f"⚠️ Failed to submit captcha-form: {e}")
+                            else:
+                                # fallback: try to trigger grecaptcha callback or reload page
+                                try:
+                                    driver.execute_script('if(window.___grecaptcha_cfg){/* noop to trigger if present */};')
+                                    print("ℹ️ Attempted to trigger grecaptcha config callback (if present).")
+                                except:
+                                    pass
+                                # As a last resort, reload the page to let the server re-check token
+                                try:
+                                    driver.refresh()
+                                    print("🔁 Page refreshed after injection.")
+                                except Exception as e:
+                                    print(f"⚠️ Failed to refresh page after injection: {e}")
+                        except Exception as e:
+                            print(f"⚠️ Error when checking/submitting captcha-form: {e}")
+
+                    
+                        # Wait a short time for the site to react (Cloudflare may redirect)
+                        time.sleep(4)
+
+                        # Save "after" screenshot + HTML snapshot
+                        try:
+                            save_debug(driver, name, "after_captcha")
+                            with open(f"screenshots/{safe_name}_after_{timestamp}.html", "w", encoding="utf-8") as f:
+                                f.write(driver.page_source)
+                            print("💾 Saved after-injection HTML snapshot.")
+                        except Exception as e:
+                            print(f"⚠️ Failed to save after-snapshot: {e}")
+
+                        print("🌍 Current URL after CAPTCHA handling:", driver.current_url)
+
+                        print("✅ Injected CAPTCHA solution")
+                    except Exception as e:
+                        # Save debugging artifacts if something fails during solving/injection
+                        print(f"❌ Failed to solve/inject CAPTCHA for {sheet_tab}: {e}")
+                        try:
+                            save_debug(driver, name, "captcha_error")
+                            with open(f"screenshots/{safe_name}_error_{timestamp}.html", "w", encoding="utf-8") as f:
+                                f.write(driver.page_source)
+                        except:
+                            pass
+                        continue  # skip this show (or you could retry depending on your strategy)
+                else:
+                    print("❌ Could not detect site key, skipping CAPTCHA")
+                    continue
                 
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
