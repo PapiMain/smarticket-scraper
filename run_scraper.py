@@ -126,19 +126,30 @@ def get_recaptcha_site_key(driver):
         return None
 
 # Solve CAPTCHA using CapSolver
-def solve_captcha(site_url, site_key):
+def solve_captcha(site_url, site_key, captcha_type="recaptcha"):
     """
-    Uses CapSolver to solve reCAPTCHA v2 and return the token.
+    Uses CapSolver to solve reCAPTCHA v2 or Cloudflare Turnstile.
     """
-    print("🧩 Solving CAPTCHA via CapSolver...")
+    print(f"🧩 Solving {captcha_type.upper()} CAPTCHA via CapSolver...")
 
-    data = {
-        "clientKey": CAPSOLVER_API_KEY,
-        "task": {
-            "type": "NoCaptchaTaskProxyless",
+    if captcha_type == "recaptcha":
+        task = {
+            "type": "NoCaptchaTaskProxyless",   # reCAPTCHA v2
             "websiteURL": site_url,
             "websiteKey": site_key
         }
+    elif captcha_type == "turnstile":
+        task = {
+            "type": "TurnstileTaskProxyless",   # Cloudflare Turnstile
+            "websiteURL": site_url,
+            "websiteKey": site_key
+        }
+    else:
+        raise ValueError(f"Unsupported captcha_type: {captcha_type}")
+
+    data = {
+        "clientKey": CAPSOLVER_API_KEY,
+        "task": task
     }
 
     # 1️⃣ Create Task
@@ -151,11 +162,20 @@ def solve_captcha(site_url, site_key):
     # 2️⃣ Poll result
     for _ in range(30):  # 30 attempts ~ 60s
         time.sleep(2)
-        result = requests.post("https://api.capsolver.com/getTaskResult", json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id}).json()
+        result = requests.post(
+            "https://api.capsolver.com/getTaskResult",
+            json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id}
+        ).json()
+
         if result.get("status") == "ready":
-            token = result["solution"]["gRecaptchaResponse"]
+            if captcha_type == "recaptcha":
+                token = result["solution"]["gRecaptchaResponse"]
+            else:  # turnstile
+                token = result["solution"]["token"]
+
             print("✅ CAPTCHA solved")
             return token
+
     raise Exception("❌ CAPTCHA solving timed out")
 
 # Parse Hebrew date string
@@ -329,7 +349,7 @@ def scrape_site(site_config):
                 is_captcha = is_captcha_page(driver, name)
 
                 if is_captcha:
-                     # helpful local helper names
+                    # helpful local helper names
                     safe_name = name.replace(" ", "_").replace("/", "_")
                     timestamp = int(time.time())
 
@@ -343,69 +363,140 @@ def scrape_site(site_config):
                     except Exception as e:
                         print(f"⚠️ Failed to save before-snapshot: {e}")
 
-                    site_key = get_recaptcha_site_key(driver)
-                    print(f"🔍 Site key detection result: {site_key}")
+                    # Try to detect reCAPTCHA sitekey (your existing helper)
+                    recaptcha_site_key = get_recaptcha_site_key(driver)
+                    print(f"🔍 reCAPTCHA site key detection result: {recaptcha_site_key}")
 
-                    if not site_key:
-                        # Extra detection hints to help debug (Turnstile/hCaptcha detection)
+                    # Try to detect Turnstile (Cloudflare) sitekey
+                    try:
+                        turnstile_site_key = driver.execute_script(
+                            "var el = document.querySelector('[data-sitekey]');"
+                            "return el ? el.getAttribute('data-sitekey') : null;"
+                        )
+                    except Exception as e:
+                        print(f"⚠️ Error extracting Turnstile sitekey via JS: {e}")
+                        turnstile_site_key = None
+                    print(f"🔍 Turnstile site key detection result: {turnstile_site_key}")
+
+                    # If neither was found, dump helpful hints and skip this term
+                    if not recaptcha_site_key and not turnstile_site_key:
                         page_snippet = driver.page_source[:2000].lower()
                         if "turnstile" in page_snippet:
-                            print("ℹ️ Page contains 'turnstile' - could be Cloudflare Turnstile challenge.")
+                            print("ℹ️ Page contains 'turnstile' - likely Cloudflare Turnstile.")
                         if "hcaptcha" in page_snippet or "h-captcha" in page_snippet:
                             print("ℹ️ Page contains 'hcaptcha' - could be hCaptcha.")
-                        print("❌ Could not detect a reCAPTCHA site key - saving snapshot and skipping this term.")
-                        # Save another snapshot flagged for missing key
+                        print("❌ Could not detect a known CAPTCHA site key - saving snapshot and skipping this term.")
                         try:
                             save_debug(driver, name, "no_site_key")
                             with open(f"screenshots/{safe_name}_no_site_key_{timestamp}.html", "w", encoding="utf-8") as f:
                                 f.write(driver.page_source)
-                        except:
+                        except Exception:
                             pass
                         continue
+
+                    # Choose which type to solve
+                    if recaptcha_site_key:
+                        captcha_type = "recaptcha"
+                        site_key = recaptcha_site_key
+                    else:
+                        captcha_type = "turnstile"
+                        site_key = turnstile_site_key
+
                     try:
-                         # Solve captcha via your existing solve_captcha()
-                        token = solve_captcha(driver.current_url, site_key)
-                        print(f"🧩 Received token (start): {token[:40]}...")
+                        # Solve captcha — pass captcha_type so your solver can choose the right task
+                        # (Update solve_captcha to handle 'turnstile' if it doesn't yet.)
+                        token = solve_captcha(driver.current_url, site_key, captcha_type=captcha_type)
+                        print(f"🧩 Received token (start, type={captcha_type}): {token[:40]}...")
 
                         # Take screenshot immediately before injection (extra safety)
                         save_debug(driver, name, "before_injection")
 
-                        # Make sure the g-recaptcha-response element exists; if not, create it.
-                        try:
-                            exists = driver.execute_script('return !!document.getElementById("g-recaptcha-response");')
-                            if not exists:
-                                # create a hidden textarea to hold the token (some sites require it)
+                        # Inject token into the correct input
+                        if captcha_type == "recaptcha":
+                            # Ensure g-recaptcha-response exists
+                            try:
+                                exists = driver.execute_script('return !!document.getElementById("g-recaptcha-response");')
+                                if not exists:
+                                    driver.execute_script(
+                                        'var t=document.createElement("textarea");'
+                                        't.id="g-recaptcha-response"; t.style.display="none";'
+                                        'document.body.appendChild(t);'
+                                    )
+                                    print("ℹ️ Created missing g-recaptcha-response textarea in DOM.")
+                            except Exception as e:
+                                print(f"⚠️ Could not check/create g-recaptcha-response element: {e}")
+
+                            # Inject token safely (escape quotes)
+                            safe_token = token.replace('"', '\\"')
+                            try:
+                                driver.execute_script('document.getElementById("g-recaptcha-response").style.display = "block";')
+                                driver.execute_script(f'document.getElementById("g-recaptcha-response").value = "{safe_token}";')
+                                print("📝 Injected token into g-recaptcha-response element.")
+                            except Exception as e:
+                                print(f"❌ Failed injecting token into g-recaptcha-response: {e}")
+                                save_debug(driver, name, "inject_failed")
+
+                            # Try to trigger any grecaptcha callbacks if present
+                            try:
                                 driver.execute_script(
-                                    'var t=document.createElement("textarea");'
-                                    't.id="g-recaptcha-response"; t.style.display="none";'
-                                    'document.body.appendChild(t);'
+                                    "if(window.grecaptcha && typeof window.grecaptcha.getResponse === 'function'){"
+                                    "/* noop */ }"
                                 )
-                                print("ℹ️ Created missing g-recaptcha-response textarea in DOM.")
-                        except Exception as e:
-                            print(f"⚠️ Could not check/create g-recaptcha-response element: {e}")
+                            except Exception:
+                                pass
 
-                        # Inject solved token
+                        else:  # turnstile
+                            # Find hidden input for Turnstile response (common name: cf-turnstile-response)
+                            try:
+                                # Try common selector first; fallback to finding by id/name
+                                exists = driver.execute_script(
+                                    "return !!(document.querySelector('input[name=\"cf-turnstile-response\"]') || document.querySelector('[id^=\"cf-chl-widget\"]'))"
+                                )
+                            except Exception as e:
+                                print(f"⚠️ Could not check Turnstile response element: {e}")
+                                exists = False
+
+                            # Insert hidden input if missing (some pages include empty input already)
+                            try:
+                                driver.execute_script(
+                                    'if(!document.querySelector(\'input[name="cf-turnstile-response"]\')){'
+                                    'var t=document.createElement("input"); t.type="hidden"; '
+                                    't.name="cf-turnstile-response"; t.id="cf-turnstile-response"; '
+                                    'document.body.appendChild(t); }'
+                                )
+                            except Exception as e:
+                                print(f"⚠️ Could not create cf-turnstile-response input: {e}")
+
+                            safe_token = token.replace('"', '\\"')
+                            try:
+                                driver.execute_script(
+                                    f'var el = document.querySelector(\'input[name="cf-turnstile-response"]\') || document.getElementById("cf-chl-widget-78zb3_response") || document.getElementById("cf-turnstile-response");'
+                                    f'if(el) el.value = "{safe_token}";'
+                                )
+                                print("📝 Injected token into cf-turnstile-response (Turnstile).")
+                            except Exception as e:
+                                print(f"❌ Failed injecting token into cf-turnstile-response: {e}")
+                                save_debug(driver, name, "inject_failed")
+
+                            # Optionally call any Turnstile callback if present (best-effort)
+                            try:
+                                driver.execute_script('if(window.turnstile && window.turnstile.execute) { /* noop */ }')
+                            except Exception:
+                                pass
+
+                        # Verify the token got set (best-effort)
                         try:
-                            driver.execute_script(
-                                'document.getElementById("g-recaptcha-response").style.display = "block";'
-                            )
-                            driver.execute_script(
-                                f'document.getElementById("g-recaptcha-response").value = "{token}";'
-                            )
-                            print("📝 Injected token into g-recaptcha-response element.")
+                            if captcha_type == "recaptcha":
+                                set_val = driver.execute_script('return document.getElementById("g-recaptcha-response").value;')
+                            else:
+                                set_val = driver.execute_script(
+                                    'var el = document.querySelector(\'input[name="cf-turnstile-response"]\'); return el ? el.value : null;'
+                                )
+                            print(f"✅ Token field now set (start): {set_val[:40] if set_val else 'EMPTY'}")
                         except Exception as e:
-                            print(f"❌ Failed injecting token into g-recaptcha-response: {e}")
-                            save_debug(driver, name, "inject_failed")
-                            # still attempt to continue to give more info
+                            print(f"⚠️ Could not read token value after injection: {e}")
 
-                        # Verify the token got set
-                        try:
-                            set_val = driver.execute_script('return document.getElementById("g-recaptcha-response").value;')
-                            print(f"✅ g-recaptcha-response now set (start): {set_val[:40] if set_val else 'EMPTY'}")
-                        except Exception as e:
-                            print(f"⚠️ Could not read g-recaptcha-response value after injection: {e}")
-
-                        # Check for a form to submit and submit it if present
+                        # Try to submit a form or refresh so server validates token
                         try:
                             form_exists = driver.execute_script('return !!document.getElementById("captcha-form");')
                             print(f"📂 captcha-form exists: {form_exists}")
@@ -416,13 +507,7 @@ def scrape_site(site_config):
                                 except Exception as e:
                                     print(f"⚠️ Failed to submit captcha-form: {e}")
                             else:
-                                # fallback: try to trigger grecaptcha callback or reload page
-                                try:
-                                    driver.execute_script('if(window.___grecaptcha_cfg){/* noop to trigger if present */};')
-                                    print("ℹ️ Attempted to trigger grecaptcha config callback (if present).")
-                                except:
-                                    pass
-                                # As a last resort, reload the page to let the server re-check token
+                                # fallback: reload page and hope server sees token
                                 try:
                                     driver.refresh()
                                     print("🔁 Page refreshed after injection.")
@@ -431,7 +516,6 @@ def scrape_site(site_config):
                         except Exception as e:
                             print(f"⚠️ Error when checking/submitting captcha-form: {e}")
 
-                    
                         # Wait a short time for the site to react (Cloudflare may redirect)
                         time.sleep(4)
 
@@ -445,7 +529,6 @@ def scrape_site(site_config):
                             print(f"⚠️ Failed to save after-snapshot: {e}")
 
                         print("🌍 Current URL after CAPTCHA handling:", driver.current_url)
-
                         print("✅ Injected CAPTCHA solution")
                     except Exception as e:
                         # Save debugging artifacts if something fails during solving/injection
@@ -460,6 +543,7 @@ def scrape_site(site_config):
                 else:
                     print("❌ Could not detect site key, skipping CAPTCHA")
                     continue
+
                 
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
