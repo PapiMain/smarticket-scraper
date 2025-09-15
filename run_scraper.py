@@ -273,6 +273,11 @@ def handle_captcha(driver, name, is_captcha):
     except Exception as e:
         print(f"⚠️ Failed to save before-snapshot: {e}")
 
+    if "Verifying you are human" in driver.page_source:
+        print("⏳ Waiting for Cloudflare verification...")
+        time.sleep(6)  # or longer if needed
+        driver.refresh()  # optional
+
     # Try to detect reCAPTCHA sitekey (your existing helper)
     recaptcha_site_key = None
     try:
@@ -323,6 +328,13 @@ def handle_captcha(driver, name, is_captcha):
         captcha_type = "auto"   # our solve_captcha() should treat this as falling back to AntiTurnstileTask
         site_key = None
 
+    # If no sitekey found, wait a few seconds for Cloudflare JS to complete
+    if not recaptcha_site_key and not turnstile_site_key:
+        print("⚠️ No site key found — likely Cloudflare managed challenge.")
+        print("⏳ Waiting 6s for browser JS to complete...")
+        time.sleep(6)
+        return True  # attempted captcha handling (wait)
+    
     # Solve captcha via external solver (solve_captcha must support site_key=None / captcha_type="auto")
     try:
         token = solve_captcha(driver.current_url, site_key, captcha_type=captcha_type)
