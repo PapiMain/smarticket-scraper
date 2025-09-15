@@ -90,7 +90,7 @@ def is_captcha_page(driver, show_name="unknown"):
         print(f"⚠️ CAPTCHA elements detected for '{show_name}'")
         print("ℹ️ Page title:", title)
         print("ℹ️ First 500 chars of HTML:", html[:500])
-        save_debug(driver, show_name, "captcha")
+        # save_debug(driver, show_name, "captcha")
         return True
 
     # Quick check: Cloudflare interstitial
@@ -241,7 +241,7 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
     # timed out
     raise Exception("❌ CAPTCHA solving timed out")
 
-def handle_captcha(driver, name, sheet_tab, is_captcha):
+def handle_captcha(driver, name, is_captcha):
     """
     Detects captcha type (reCAPTCHA / Turnstile / Managed Cloudflare), solves it via
     solve_captcha(), injects the returned token into the appropriate DOM input,
@@ -651,7 +651,7 @@ def scrape_site(site_config):
                 is_captcha = is_captcha_page(driver, name)
 
                 if is_captcha:
-                    if not handle_captcha(driver, name, sheet_tab):
+                    if not handle_captcha(driver, name, True):
                         print(f"⚠️ Skipping '{name}' because CAPTCHA could not be solved.")
                         continue
                 else:
