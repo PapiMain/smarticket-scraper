@@ -373,6 +373,17 @@ def scrape_site(site_config):
                             "var el = document.querySelector('[data-sitekey]');"
                             "return el ? el.getAttribute('data-sitekey') : null;"
                         )
+                        if not turnstile_site_key:
+                            try:
+                                scripts = driver.find_elements(By.TAG_NAME, "script")
+                                for s in scripts:
+                                    src = s.get_attribute("src") or ""
+                                    if "sitekey=" in src:
+                                        turnstile_site_key = src.split("sitekey=")[1].split("&")[0]
+                                        break
+                            except Exception as e:
+                                print(f"⚠️ Error scanning script tags for sitekey: {e}")
+
                     except Exception as e:
                         print(f"⚠️ Error extracting Turnstile sitekey via JS: {e}")
                         turnstile_site_key = None
