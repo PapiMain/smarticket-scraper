@@ -183,6 +183,15 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
         }
         chosen = "AntiTurnstileTask (Anti-Cloudflare fallback)"
 
+    if not site_key:
+        print("⚠️ No sitekey detected — using AntiTurnstileTask fallback.")
+        task = {
+            "type": "AntiTurnstileTask",
+            "websiteURL": site_url,
+            "websiteKey": "no-sitekey"
+        }
+        chosen = "AntiTurnstileTask (Cloudflare managed fallback)"
+
     print(f"🔧 Creating CapSolver task: {chosen}")
 
     # Retry loop for robustness
