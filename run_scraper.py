@@ -252,12 +252,14 @@ def handle_captcha(driver, name, is_captcha):
     Args:
         driver: Selenium WebDriver instance.
         name: show/search name (used for filenames and logs).
-        sheet_tab: sheet tab name for logging/context (used in error messages).
         is_captcha: boolean flag (if True, handle captcha; otherwise function returns immediately).
+
     Returns:
-        True if function attempted captcha handling (regardless of success), False if no captcha handling required.
+        True  -> CAPTCHA was handled and site progressed (likely solved).
+        False -> No captcha handling required OR captcha handling failed (caller should skip or retry).
     """
     if not is_captcha:
+        # Caller indicated no captcha to handle; return False to mean "no handling done".
         return False
 
     safe_name = name.replace(" ", "_").replace("/", "_")
@@ -276,7 +278,10 @@ def handle_captcha(driver, name, is_captcha):
     if "Verifying you are human" in driver.page_source:
         print("⏳ Waiting for Cloudflare verification...")
         time.sleep(6)  # or longer if needed
-        driver.refresh()  # optional
+        try:
+            driver.refresh()  # optional
+        except Exception as e:
+            print(f"⚠️ Refresh failed while waiting for verification: {e}")
 
     # Try to detect reCAPTCHA sitekey (your existing helper)
     recaptcha_site_key = None
@@ -333,8 +338,9 @@ def handle_captcha(driver, name, is_captcha):
         print("⚠️ No site key found — likely Cloudflare managed challenge.")
         print("⏳ Waiting 6s for browser JS to complete...")
         time.sleep(6)
-        return True  # attempted captcha handling (wait)
-    
+        # We didn't actually solve anything — return False to indicate failure/no-solution
+        return False
+
     # Solve captcha via external solver (solve_captcha must support site_key=None / captcha_type="auto")
     try:
         token = solve_captcha(driver.current_url, site_key, captcha_type=captcha_type)
@@ -349,8 +355,8 @@ def handle_captcha(driver, name, is_captcha):
                 f.write(driver.page_source)
         except Exception:
             pass
-        # Skip this show to avoid infinite loop; caller can retry later if desired
-        return True
+        # Return False — caller should treat this as an unsolved captcha (skip/retry)
+        return False
 
     # Snapshot right before injection
     try:
@@ -388,6 +394,8 @@ def handle_captcha(driver, name, is_captcha):
             except Exception as e:
                 print(f"❌ Failed injecting token into g-recaptcha-response: {e}")
                 save_debug(driver, name, "inject_failed")
+                # injection failed — treat as failure
+                return False
 
             # Try to trigger any grecaptcha callbacks if present (best-effort)
             try:
@@ -427,6 +435,7 @@ def handle_captcha(driver, name, is_captcha):
             except Exception as e:
                 print(f"❌ Failed injecting token into Turnstile response fields: {e}")
                 save_debug(driver, name, "inject_failed")
+                return False
 
             # Optionally attempt to trigger Turnstile callback (best-effort)
             try:
@@ -437,7 +446,7 @@ def handle_captcha(driver, name, is_captcha):
     except Exception as e:
         print(f"❌ Unexpected error during injection: {e}")
         save_debug(driver, name, "inject_exception")
-        return True
+        return False
 
     # Verify the token got set (best-effort)
     try:
@@ -447,7 +456,7 @@ def handle_captcha(driver, name, is_captcha):
             set_val = driver.execute_script(
                 'var el = document.querySelector(\'input[name="cf-turnstile-response"]\'); return el ? el.value : null;'
             )
-        print(f"✅ Token field now set (start): {set_val[:40] if set_val else "EMPTY"}")
+        print(f"✅ Token field now set (start): {set_val[:40] if set_val else 'EMPTY'}")
     except Exception as e:
         print(f"⚠️ Could not read token value after injection: {e}")
 
@@ -489,8 +498,20 @@ def handle_captcha(driver, name, is_captcha):
         print(f"⚠️ Failed to save after-snapshot: {e}")
 
     print("🌍 Current URL after CAPTCHA handling:", driver.current_url)
-    print("✅ CAPTCHA handling complete (attempted injection and validation).")
-    return True
+
+    # FINAL VERIFICATION: check if captcha indicators are still present
+    try:
+        still_captcha = is_captcha_page(driver, name)
+        if still_captcha:
+            print("❌ CAPTCHA still present after handling — treating as failure.")
+            return False
+        else:
+            print("✅ CAPTCHA appears cleared / site progressed.")
+            return True
+    except Exception as e:
+        print(f"⚠️ Error during final captcha verification: {e}")
+        # If the verification itself failed, be conservative and return False
+        return False
 
 # Parse Hebrew date string
 def parse_hebrew_date(date_str):
@@ -663,9 +684,10 @@ def scrape_site(site_config):
                 is_captcha = is_captcha_page(driver, name)
 
                 if is_captcha:
-                    if not handle_captcha(driver, name, True):
+                    solved = handle_captcha(driver, name, True)
+                    if not solved:
                         print(f"⚠️ Skipping '{name}' because CAPTCHA could not be solved.")
-                        continue
+                        continue  # skip this show
                 else:
                     print(f"ℹ️ No CAPTCHA detected for '{name}'")
 
