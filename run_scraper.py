@@ -178,78 +178,88 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
         # This handles Cloudflare managed "just a moment..." challenges.
         task = {
             "type": "AntiTurnstileTask",
-            "websiteURL": site_url
-            # no websiteKey here
+            "websiteURL": site_url,
+            "websiteKey": site_key if site_key else "no-sitekey"
         }
         chosen = "AntiTurnstileTask (Anti-Cloudflare fallback)"
 
     print(f"🔧 Creating CapSolver task: {chosen}")
 
-    data = {
-        "clientKey": CAPSOLVER_API_KEY,
-        "task": task
-    }
-
-    # 1️⃣ Create task
-    create_task_resp = requests.post("https://api.capsolver.com/createTask", json=data)
-    try:
-        create_task = create_task_resp.json()
-    except Exception:
-        raise Exception(f"CapSolver createTask non-JSON response: {create_task_resp.text}")
-
-    if create_task.get("errorId") != 0:
-        raise Exception(f"CapSolver createTask error: {create_task}")
-
-    task_id = create_task.get("taskId")
-    if not task_id:
-        raise Exception(f"CapSolver returned no taskId: {create_task}")
-
-    # 2️⃣ Poll result
-    max_attempts = 45   # ~90s (2s sleep) — increase slightly for slower solves
-    for attempt in range(max_attempts):
-        time.sleep(2)
+    # Retry loop for robustness
+    max_retries = 3
+    for attempt_retry in range(1, max_retries + 1):
         try:
-            result = requests.post(
-                "https://api.capsolver.com/getTaskResult",
-                json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id},
-                timeout=30
-            ).json()
+            print(f"🚀 Attempt {attempt_retry}/{max_retries} to create task...")
+            data = {"clientKey": CAPSOLVER_API_KEY, "task": task}
+            create_task_resp = requests.post("https://api.capsolver.com/createTask", json=data, timeout=30)
+            create_task = create_task_resp.json()
         except Exception as e:
-            print(f"⚠️ Polling attempt {attempt+1} failed: {e}")
+            print(f"⚠️ CreateTask request failed: {e}")
+            if attempt_retry < max_retries:
+                time.sleep(5)
+                continue
+            raise
+
+        if create_task.get("errorId") != 0:
+            print(f"❌ CapSolver createTask error: {create_task}")
+            if attempt_retry < max_retries:
+                time.sleep(5)
+                continue
+            raise Exception(f"CapSolver createTask error after retries: {create_task}")
+
+        task_id = create_task.get("taskId")
+        if not task_id:
+            if attempt_retry < max_retries:
+                print("⚠️ No taskId returned, retrying...")
+                time.sleep(5)
+                continue
+            raise Exception(f"CapSolver returned no taskId after retries: {create_task}")
+
+        # 2️⃣ Poll result
+        max_attempts = 45   # ~90s
+        for attempt in range(max_attempts):
+            time.sleep(2)
+            try:
+                result = requests.post(
+                    "https://api.capsolver.com/getTaskResult",
+                    json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id},
+                    timeout=30
+                ).json()
+            except Exception as e:
+                print(f"⚠️ Polling attempt {attempt+1} failed: {e}")
+                continue
+
+            status = result.get("status")
+            if status == "ready":
+                solution = result.get("solution", {})
+                token = None
+                if "gRecaptchaResponse" in solution:
+                    token = solution.get("gRecaptchaResponse")
+                elif "token" in solution:
+                    token = solution.get("token")
+                elif "cfTurnstileResponse" in solution:
+                    token = solution.get("cfTurnstileResponse")
+                else:
+                    for v in solution.values():
+                        if isinstance(v, str) and len(v) > 50:
+                            token = v
+                            break
+
+                if not token:
+                    raise Exception(f"CapSolver returned ready but no recognizable token: {solution}")
+
+                print("✅ CAPTCHA solved successfully")
+                return token
+
+            if attempt % 5 == 0:
+                print(f"⏳ Waiting for solution... attempt {attempt+1}/{max_attempts}")
+
+        # Polling timed out
+        print("⌛ Timed out waiting for captcha solution")
+        if attempt_retry < max_retries:
+            time.sleep(5)
             continue
-
-        status = result.get("status")
-        if status == "ready":
-            solution = result.get("solution", {})
-            # Different task types return tokens with different keys; handle common cases:
-            token = None
-            if "gRecaptchaResponse" in solution:
-                token = solution.get("gRecaptchaResponse")
-            elif "token" in solution:
-                token = solution.get("token")
-            elif "cfTurnstileResponse" in solution:
-                token = solution.get("cfTurnstileResponse")
-            else:
-                # As a last resort, check nested fields or the whole solution
-                # (some providers may place token in different keys)
-                for v in solution.values():
-                    if isinstance(v, str) and len(v) > 50:
-                        token = v
-                        break
-
-            if not token:
-                # If no token found, still return whole solution if it looks like the token
-                raise Exception(f"CapSolver returned ready but no recognizable token in solution: {solution}")
-
-            print("✅ CAPTCHA solved successfully")
-            return token
-
-        # not ready yet — print occasional heartbeat
-        if attempt % 5 == 0:
-            print(f"⏳ Waiting for solution... attempt {attempt+1}/{max_attempts}")
-
-    # timed out
-    raise Exception("❌ CAPTCHA solving timed out")
+        raise Exception("❌ CAPTCHA solving timed out after retries")
 
 def handle_captcha(driver, name, is_captcha):
     """
