@@ -64,6 +64,12 @@ def get_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.binary_location = "/usr/bin/chromium-browser"  # 👈 important
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": """
+        Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
+        """
+    })
 
     service = Service(executable_path="/usr/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
@@ -335,11 +341,16 @@ def handle_captcha(driver, name, is_captcha):
 
     # If no sitekey found, wait a few seconds for Cloudflare JS to complete
     if not recaptcha_site_key and not turnstile_site_key:
-        print("⚠️ No site key found — likely Cloudflare managed challenge.")
-        print("⏳ Waiting 6s for browser JS to complete...")
-        time.sleep(6)
-        # We didn't actually solve anything — return False to indicate failure/no-solution
-        return False
+        print("⚠️ No site key found — using AntiTurnstileTask fallback.")
+        
+        # Give Cloudflare a chance to clear itself
+        time.sleep(10)
+        if "just a moment" in driver.title.lower():
+            print("⏳ Still stuck on Cloudflare interstitial, sending to solver...")
+    
+        captcha_type = "auto"
+        site_key = None
+
 
     # Solve captcha via external solver (solve_captcha must support site_key=None / captcha_type="auto")
     try:
