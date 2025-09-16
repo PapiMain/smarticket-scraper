@@ -65,15 +65,19 @@ def get_driver():
     options.add_argument("--window-size=1920,1080")
     options.binary_location = "/usr/bin/chromium-browser"  # 👈 important
     options.add_argument("--disable-blink-features=AutomationControlled")
+
+    service = Service(executable_path="/usr/bin/chromedriver")
+    driver = webdriver.Chrome(service=service, options=options)
+
+    # Now you can safely inject the stealth JS
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
         Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
         """
     })
 
-    service = Service(executable_path="/usr/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=options)
     return driver
+
 
 # Save screenshot for debugging
 def save_debug(driver, show_name, suffix):
@@ -342,7 +346,7 @@ def handle_captcha(driver, name, is_captcha):
     # If no sitekey found, wait a few seconds for Cloudflare JS to complete
     if not recaptcha_site_key and not turnstile_site_key:
         print("⚠️ No site key found — using AntiTurnstileTask fallback.")
-        
+
         # Give Cloudflare a chance to clear itself
         time.sleep(10)
         if "just a moment" in driver.title.lower():
