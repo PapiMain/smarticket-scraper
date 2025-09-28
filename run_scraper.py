@@ -181,15 +181,6 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
         chosen = "AntiTurnstileTask (managed challenge, no sitekey)"
         print("⚠️ No sitekey detected — using AntiTurnstileTask fallback")
 
-    if not site_key:
-        task = {
-            "type": "AntiTurnstileTask",
-            "websiteURL": site_url
-        }
-        chosen = "AntiTurnstileTask (no sitekey / managed challenge)"
-        print("⚠️ No sitekey detected — using AntiTurnstileTask fallback.")
-
-
     print(f"🔧 Creating CapSolver task: {chosen}")
 
     # Retry loop for robustness
