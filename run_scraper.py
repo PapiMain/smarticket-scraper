@@ -294,13 +294,13 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
             "websiteURL": site_url,
             "websiteKey": site_key
         }
-        chosen = "TurnstileTaskProxyless (Cloudflare Turnstile)"
+        chosen = "TurnstileTask (Cloudflare Turnstile)"
     elif captcha_type == "anti_turnstile":
         task = {
-            "type": "AntiTurnstileTask",
+            "type": "AntiTurnstileTaskProxyLess",
             "websiteURL": site_url
         }
-        chosen = "AntiTurnstileTask (managed challenge, no sitekey)"
+        chosen = "AntiTurnstileTaskProxyLess (managed challenge, no sitekey)"
     else:
         raise Exception("❌ No valid captcha_type or site_key detected for CapSolver")
 
