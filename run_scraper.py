@@ -11,9 +11,12 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from urllib.parse import quote
+from urllib.parse import urlparse, parse_qs
 import requests
 from datetime import datetime
 import pytz
+import re
+
 
 
 SITES = {
@@ -80,11 +83,65 @@ def get_driver():
 
 # Save screenshot for debugging
 def save_debug(driver, show_name, suffix):
+    """
+    Save screenshot + page HTML + attempt to download inline images for later offline inspection.
+    """
     safe_name = show_name.replace(" ", "_").replace("/", "_")
     os.makedirs("screenshots", exist_ok=True)
-    path = f"screenshots/{safe_name}_{suffix}_{int(time.time())}.png"
-    driver.save_screenshot(path)
-    print(f"📸 Screenshot saved: {path}")
+    ts = int(time.time())
+
+    # 1) screenshot
+    png_path = f"screenshots/{safe_name}_{suffix}_{ts}.png"
+    try:
+        driver.save_screenshot(png_path)
+        print(f"📸 Screenshot saved: {png_path}")
+    except Exception as e:
+        print(f"⚠️ Failed saving screenshot: {e}")
+
+    # 2) save page HTML
+    html_path = f"screenshots/{safe_name}_{suffix}_{ts}.html"
+    try:
+        html = driver.page_source
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html)
+        print(f"🗂️ HTML saved: {html_path}")
+    except Exception as e:
+        print(f"⚠️ Failed saving HTML: {e}")
+
+    # 3) attempt to download images referenced in the page (may be blocked by site)
+    try:
+        asset_dir = f"screenshots/{safe_name}_{suffix}_{ts}_assets"
+        os.makedirs(asset_dir, exist_ok=True)
+        imgs = driver.find_elements(By.TAG_NAME, "img")
+        downloaded = 0
+        for i, img in enumerate(imgs):
+            try:
+                src = img.get_attribute("src")
+                if not src:
+                    continue
+                # make filename from URL
+                parsed = urlparse(src)
+                filename = os.path.basename(parsed.path) or f"img_{i}.bin"
+                # avoid query params in filename
+                filename = re.sub(r'[^0-9A-Za-z_.-]', '_', filename)
+                dest = os.path.join(asset_dir, filename)
+                # avoid re-downloading same file
+                if os.path.exists(dest):
+                    continue
+                # download with requests (honor absolute URLs)
+                resp = requests.get(src, timeout=15)
+                if resp.status_code == 200:
+                    with open(dest, "wb") as fh:
+                        fh.write(resp.content)
+                    downloaded += 1
+            except Exception:
+                continue
+        if downloaded:
+            print(f"🖼️ Downloaded {downloaded} images to {asset_dir}")
+        else:
+            print(f"🖼️ No images downloaded (site may block requests or images are data-URIs).")
+    except Exception as e:
+        print(f"⚠️ Error while saving assets: {e}")
 
 # Check if current page is a CAPTCHA page
 def is_captcha_page(driver, show_name="unknown"):
@@ -111,27 +168,93 @@ def is_captcha_page(driver, show_name="unknown"):
     print(f"✅ No CAPTCHA detected for '{show_name}'")
     return False
 
-# Detect reCAPTCHA site key
-def get_recaptcha_site_key(driver):
+def find_turnstile_sitekey(driver, verbose=True):
     """
-    Detects reCAPTCHA v2 site key dynamically from the page.
-    Returns the site key string if found, else None.
+    Try multiple strategies to discover a Cloudflare Turnstile sitekey on the page.
+    Returns sitekey string if found, else None.
+    Strategies:
+      - iframe[src*="turnstile"] query param k=
+      - elements with data-sitekey attribute
+      - search page_source for Turnstile-like keys (start with '0x')
+      - inspect inline <script> tags text for '0x...' occurrences
+      - check common window variables via execute_script
     """
     try:
-        # Wait for the iframe that contains the reCAPTCHA
-        iframe = WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//iframe[contains(@src,'recaptcha')]"))
-        )
-        src = iframe.get_attribute("src")
-        # The site key is usually in the query string: k=SITE_KEY
-        from urllib.parse import urlparse, parse_qs
-        parsed_url = urlparse(src)
-        query_params = parse_qs(parsed_url.query)
-        site_key = query_params.get("k", [None])[0]
-        if site_key:
-            print(f"🧩 Detected reCAPTCHA site key: {site_key}")
-        return site_key
-    except TimeoutException:
+        # 1) iframe[src*="turnstile"] -> ?k=SITEKEY
+        try:
+            iframe = driver.find_element(By.CSS_SELECTOR, "iframe[src*='turnstile']")
+            src = iframe.get_attribute("src") or ""
+            if "k=" in src:
+                parsed = urlparse(src)
+                q = parse_qs(parsed.query)
+                site_key = q.get("k", [None])[0]
+                if site_key:
+                    if verbose: print(f"🧩 sitekey from turnstile iframe src: {site_key}")
+                    return site_key
+        except Exception:
+            pass
+
+        # 2) any element with data-sitekey
+        try:
+            el = driver.find_element(By.CSS_SELECTOR, "[data-sitekey]")
+            site_key = el.get_attribute("data-sitekey")
+            if site_key:
+                if verbose: print(f"🧩 sitekey from data-sitekey attribute: {site_key}")
+                return site_key
+        except Exception:
+            pass
+
+        # 3) search whole page_source for a Turnstile-looking key (Turnstile keys often start with "0x")
+        try:
+            src = driver.page_source
+            # pattern: 0x followed by at least 10 chars (alphanumeric)
+            m = re.search(r"(0x[a-zA-Z0-9_\-]{8,60})", src)
+            if m:
+                site_key = m.group(1)
+                if verbose: print(f"🧩 sitekey found in page_source (regex): {site_key}")
+                return site_key
+        except Exception:
+            pass
+
+        # 4) search inline script tags text
+        try:
+            scripts = driver.find_elements(By.TAG_NAME, "script")
+            for s in scripts:
+                try:
+                    txt = s.get_attribute("innerText") or ""
+                    m = re.search(r"(0x[a-zA-Z0-9_\-]{8,60})", txt)
+                    if m:
+                        site_key = m.group(1)
+                        if verbose: print(f"🧩 sitekey found inside <script>: {site_key}")
+                        return site_key
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        # 5) attempt some common JS variables (Friends or sites sometimes expose it)
+        try:
+            js_try = """
+                return window.turnstileSiteKey
+                    || window.turnstile_site_key
+                    || window.__cf_turnstile_sitekey
+                    || window.Turnstile?.siteKey
+                    || (document.querySelector('[data-sitekey]') && document.querySelector('[data-sitekey]').getAttribute('data-sitekey'))
+                    || null;
+            """
+            site_key = driver.execute_script(js_try)
+            if site_key:
+                if verbose: print(f"🧩 sitekey obtained from window var: {site_key}")
+                return site_key
+        except Exception:
+            pass
+
+        # nothing found
+        if verbose: print("⚠️ No sitekey found with heuristics")
+        return None
+
+    except Exception as e:
+        if verbose: print(f"⚠️ find_turnstile_sitekey error: {e}")
         return None
 
 # Solve CAPTCHA using CapSolver
@@ -262,86 +385,74 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
 
 def handle_captcha(driver, name, is_captcha):
     """
-    Handles Cloudflare Turnstile captcha:
-    - If a sitekey exists -> solve normally (TurnstileTaskProxyless)
-    - If no sitekey (managed challenge) -> use AntiTurnstileTask
+    Improved handler:
+      - Wait for Turnstile iframe or data-sitekey
+      - Try many heuristics to extract a Turnstile sitekey (find_turnstile_sitekey)
+      - If a sitekey is found -> call solve_captcha(..., captcha_type='turnstile')
+      - If not found -> save debug (html + images) and optionally ask for manual solve
     """
     if not is_captcha:
         return False
 
     try:
         site_url = driver.current_url
-        site_key = None
 
-        # ✅ Wait up to 10 seconds for a Turnstile iframe or data-sitekey to appear
+        # 1) quick wait for any sign of Turnstile or captcha
         try:
-            # wait for either iframe[src*="turnstile"] or [data-sitekey] element
-            iframe_or_input = WebDriverWait(driver, 10).until(
-                lambda d: d.find_element(By.CSS_SELECTOR, 'iframe[src*="turnstile"], [data-sitekey]')
+            WebDriverWait(driver, 8).until(
+                lambda d: d.find_element(By.CSS_SELECTOR, "iframe[src*='turnstile'], [data-sitekey], iframe[src*='recaptcha'], .g-recaptcha"), 
             )
-            # check if it's an input element
-            if iframe_or_input.tag_name.lower() == "iframe":
-                src = iframe_or_input.get_attribute("src")
-                from urllib.parse import urlparse, parse_qs
-                parsed = urlparse(src)
-                query = parse_qs(parsed.query)
-                site_key = query.get("k", [None])[0]
-            else:
-                site_key = iframe_or_input.get_attribute("data-sitekey")
+        except Exception:
+            # we continue — page might still have dynamic JS that sets sitekey, so proceed
+            pass
 
-            if site_key:
-                print(f"🧩 Found Turnstile sitekey: {site_key}")
-            else:
-                print("⚠️ Turnstile element found but no sitekey in iframe, will use fallback")
-        except TimeoutException:
-            print("⚠️ No Turnstile iframe or data-sitekey appeared after waiting, will use fallback")
-            save_debug(driver, name, "no_sitekey")
-
-        if not site_key:
-            # Try to get sitekey from Friends dynamic JS variable
-            try:
-                site_key = driver.execute_script("""
-                    return window.turnstileSiteKey || document.querySelector('div[data-sitekey]')?.getAttribute('data-sitekey');
-                """)
-                if site_key:
-                    print(f"🧩 Detected Friends dynamic Turnstile sitekey: {site_key}")
-            except Exception:
-                pass
+        # 2) try to extract sitekey using helper (search scripts, DOM, window vars)
+        site_key = find_turnstile_sitekey(driver, verbose=True)
 
         if site_key:
             captcha_type = "turnstile"
+            print("✅ Using Turnstile sitekey for CapSolver")
         else:
-            captcha_type = "anti_turnstile"  # force proper fallback for Friends site
-            print("⚠️ No Turnstile or sitekey detected, using AntiTurnstileTask")
+            # If no sitekey found, save full debug info and try a fallback.
+            captcha_type = "anti_turnstile"
+            print("⚠️ No Turnstile or sitekey detected. Will attempt anti_turnstile fallback (likely to fail).")
+            save_debug(driver, name, "no_sitekey")   # this will now save html + images (see below)
+            # If you prefer manual solving instead of letting CapSolver attempt anti_turnstile:
+            # input("Please solve the captcha in the browser, then press Enter to continue...")
 
+        # 3) call solve_captcha. If site_key is None and solver expects a websiteKey, solve_captcha may raise.
         token = solve_captcha(site_url, site_key, captcha_type=captcha_type)
-        print("✅ Got Turnstile token:", token[:40], "...")
+        print("✅ Got CAPTCHA token:", token[:40], "...")
 
-        # Inject into hidden input
-        driver.execute_script("""
-            var el = document.querySelector('input[name="cf-turnstile-response"]');
-            if (!el) {
-                el = document.createElement('input');
-                el.type = 'hidden';
-                el.name = 'cf-turnstile-response';
-                document.forms[0].appendChild(el);
-            }
-            el.value = arguments[0];
-            el.dispatchEvent(new Event("input", {bubbles:true}));
-            el.dispatchEvent(new Event("change", {bubbles:true}));
-        """, token)
-        
+        # 4) inject token (Turnstile uses cf-turnstile-response)
+        try:
+            driver.execute_script("""
+                (function(token){
+                    var el = document.querySelector('input[name="cf-turnstile-response"]');
+                    if (!el) {
+                        el = document.createElement('input');
+                        el.type = 'hidden';
+                        el.name = 'cf-turnstile-response';
+                        // attach to first form or body
+                        var f = document.forms[0] || document.body;
+                        f.appendChild(el);
+                    }
+                    el.value = token;
+                    el.dispatchEvent(new Event("input", {bubbles:true}));
+                    el.dispatchEvent(new Event("change", {bubbles:true}));
+                })(arguments[0]);
+            """, token)
+        except Exception as e:
+            print("⚠️ Failed to inject token via cf-turnstile-response:", e)
 
         save_debug(driver, name, "after_inject")
-        time.sleep(5)  # give Cloudflare time to redirect/verify
+        time.sleep(5)
         return True
-    
 
     except Exception as e:
         print("❌ Captcha handling failed:", str(e))
         save_debug(driver, name, "captcha_fail")
         return False
-
 
 # Parse Hebrew date string
 def parse_hebrew_date(date_str):
