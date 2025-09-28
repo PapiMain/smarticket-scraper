@@ -297,6 +297,17 @@ def handle_captcha(driver, name, is_captcha):
             print("⚠️ No Turnstile iframe or data-sitekey appeared after waiting, will use fallback")
             save_debug(driver, name, "no_sitekey")
 
+        if not site_key:
+            # Try to get sitekey from Friends dynamic JS variable
+            try:
+                site_key = driver.execute_script("""
+                    return window.turnstileSiteKey || document.querySelector('div[data-sitekey]')?.getAttribute('data-sitekey');
+                """)
+                if site_key:
+                    print(f"🧩 Detected Friends dynamic Turnstile sitekey: {site_key}")
+            except Exception:
+                pass
+
         if site_key:
             captcha_type = "turnstile"
         else:
