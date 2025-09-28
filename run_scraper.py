@@ -173,14 +173,13 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
         }
         chosen = "TurnstileTaskProxyless (Cloudflare Turnstile)"
     else:
-        # Fallback: use AntiTurnstileTask when no sitekey is present or when we couldn't detect
-        # This handles Cloudflare managed "just a moment..." challenges.
+        # ✅ Proper AntiTurnstileTask without passing websiteKey
         task = {
             "type": "AntiTurnstileTask",
-            "websiteURL": site_url,
-            "websiteKey": site_key if site_key else "no-sitekey"
+            "websiteURL": site_url
         }
-        chosen = "AntiTurnstileTask (Anti-Cloudflare fallback)"
+        chosen = "AntiTurnstileTask (managed challenge, no sitekey)"
+        print("⚠️ No sitekey detected — using AntiTurnstileTask fallback")
 
     if not site_key:
         task = {
