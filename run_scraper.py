@@ -295,12 +295,19 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
             "websiteKey": site_key
         }
         chosen = "AntiTurnstileTaskProxyLess (Cloudflare Turnstile with sitekey)"
-    elif captcha_type == "anti_turnstile":
+    elif captcha_type == "cloudflare_challenge": # <--- NEW BLOCK
         task = {
-            "type": "AntiTurnstileTaskProxyLess",
+            "type": "AntiCloudflareTaskProxyLess", # <--- Use the general challenge bypass task
             "websiteURL": site_url
+            # NO websiteKey required for this task type
         }
-        chosen = "AntiTurnstileTaskProxyLess (managed challenge, no sitekey)"
+        chosen = "AntiCloudflareTaskProxyLess (general Cloudflare Challenge)"
+    elif captcha_type == "anti_turnstile":
+        # task = {
+        #     "type": "AntiTurnstileTaskProxyLess",
+        #     "websiteURL": site_url
+        # }
+        raise Exception("❌ The 'anti_turnstile' task type requires a websiteKey in the current CapSolver version.")
     else:
         raise Exception("❌ No valid captcha_type or site_key detected for CapSolver")
 
@@ -414,9 +421,9 @@ def handle_captcha(driver, name, is_captcha):
 
         if "just a moment..." in page_title:
             # This is the full-page challenge, which often does not need a sitekey
-            captcha_type = "anti_turnstile"
+            captcha_type = "cloudflare_challenge"
             site_key = None # Explicitly discard any potential false positive sitekey
-            print("✅ Full-page 'just a moment...' detected. Using anti_turnstile (Managed Challenge) without sitekey.")
+            print("✅ Full-page 'just a moment...' detected. Using general CapSolver Cloudflare Challenge task.")
             
         elif site_key:
             # If a sitekey was reliably found (e.g., not the regex false positive)
@@ -424,8 +431,8 @@ def handle_captcha(driver, name, is_captcha):
             print("✅ Turnstile sitekey found. Using Turnstile task with sitekey.")
         else:
             # Fallback to anti_turnstile if no reliable key was found
-            captcha_type = "anti_turnstile"
-            print("⚠️ No reliable sitekey found. Using anti_turnstile fallback.")
+            captcha_type = "cloudflare_challenge"
+            print("⚠️ No sitekey found, falling back to general Cloudflare Challenge task.")
 
         # 3) call solve_captcha. If site_key is None and solver expects a websiteKey, solve_captcha may raise.
         token = solve_captcha(site_url, site_key, captcha_type=captcha_type)
