@@ -290,7 +290,7 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
         chosen = "NoCaptchaTaskProxyless (reCAPTCHA v2)"
     elif captcha_type == "turnstile" and site_key:
         task = {
-            "type": "TurnstileTaskProxyless",
+            "type": "TurnstileTask",
             "websiteURL": site_url,
             "websiteKey": site_key
         }
