@@ -280,12 +280,30 @@ def handle_captcha(driver, name, is_captcha):
 
     try:
         site_url = driver.current_url
+        site_key = None
+
+        # ✅ Wait up to 10 seconds for a Turnstile iframe or data-sitekey to appear
         try:
-            site_key = driver.find_element(By.CSS_SELECTOR, "[data-sitekey]").get_attribute("data-sitekey")
-            print(f"🧩 Found Turnstile sitekey: {site_key}")
-        except Exception:
-            site_key = None
-            print("⚠️ No sitekey detected on page, using AntiTurnstileTask fallback")
+            # wait for either iframe[src*="turnstile"] or [data-sitekey] element
+            iframe_or_input = WebDriverWait(driver, 10).until(
+                lambda d: d.find_element(By.CSS_SELECTOR, 'iframe[src*="turnstile"], [data-sitekey]')
+            )
+            # check if it's an input element
+            if iframe_or_input.tag_name.lower() == "iframe":
+                src = iframe_or_input.get_attribute("src")
+                from urllib.parse import urlparse, parse_qs
+                parsed = urlparse(src)
+                query = parse_qs(parsed.query)
+                site_key = query.get("k", [None])[0]
+            else:
+                site_key = iframe_or_input.get_attribute("data-sitekey")
+
+            if site_key:
+                print(f"🧩 Found Turnstile sitekey: {site_key}")
+            else:
+                print("⚠️ Turnstile element found but no sitekey in iframe, will use fallback")
+        except TimeoutException:
+            print("⚠️ No Turnstile iframe or data-sitekey appeared after waiting, will use fallback")
             save_debug(driver, name, "no_sitekey")
 
         token = solve_captcha(site_url, site_key, captcha_type="turnstile")
