@@ -78,7 +78,6 @@ def get_driver():
 
     return driver
 
-
 # Save screenshot for debugging
 def save_debug(driver, show_name, suffix):
     safe_name = show_name.replace(" ", "_").replace("/", "_")
@@ -184,13 +183,13 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
         chosen = "AntiTurnstileTask (Anti-Cloudflare fallback)"
 
     if not site_key:
-        print("⚠️ No sitekey detected — using AntiTurnstileTask fallback.")
         task = {
             "type": "AntiTurnstileTask",
-            "websiteURL": site_url,
-            "websiteKey": "no-sitekey"
+            "websiteURL": site_url
         }
-        chosen = "AntiTurnstileTask (Cloudflare managed fallback)"
+        chosen = "AntiTurnstileTask (no sitekey / managed challenge)"
+        print("⚠️ No sitekey detected — using AntiTurnstileTask fallback.")
+
 
     print(f"🔧 Creating CapSolver task: {chosen}")
 
@@ -272,20 +271,27 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
 
 def handle_captcha(driver, name, is_captcha):
     """
-    Detects captcha type (Cloudflare Turnstile), solves it via solve_captcha(),
-    injects the returned token into the page, and lets CF validate it.
+    Handles Cloudflare Turnstile captcha:
+    - If a sitekey exists -> solve normally (TurnstileTaskProxyless)
+    - If no sitekey (managed challenge) -> use AntiTurnstileTask
     """
     if not is_captcha:
         return False
 
     try:
-        site_key = driver.find_element(By.CSS_SELECTOR, "[data-sitekey]").get_attribute("data-sitekey")
         site_url = driver.current_url
+        try:
+            site_key = driver.find_element(By.CSS_SELECTOR, "[data-sitekey]").get_attribute("data-sitekey")
+            print(f"🧩 Found Turnstile sitekey: {site_key}")
+        except Exception:
+            site_key = None
+            print("⚠️ No sitekey detected on page, using AntiTurnstileTask fallback")
+            save_debug(driver, name, "no_sitekey")
 
         token = solve_captcha(site_url, site_key, captcha_type="turnstile")
-        print("✅ Got Turnstile token:", token[:20], "...")
+        print("✅ Got Turnstile token:", token[:40], "...")
 
-        # Inject into hidden Turnstile input
+        # Inject into hidden input
         driver.execute_script("""
             var el = document.querySelector('input[name="cf-turnstile-response"]');
             if (!el) {
@@ -298,13 +304,18 @@ def handle_captcha(driver, name, is_captcha):
             el.dispatchEvent(new Event("input", {bubbles:true}));
             el.dispatchEvent(new Event("change", {bubbles:true}));
         """, token)
+        
 
-        time.sleep(2)  # allow CF to verify
+        save_debug(driver, name, "after_inject")
+        time.sleep(5)  # give Cloudflare time to redirect/verify
         return True
+    
 
     except Exception as e:
         print("❌ Captcha handling failed:", str(e))
+        save_debug(driver, name, "captcha_fail")
         return False
+
 
 # Parse Hebrew date string
 def parse_hebrew_date(date_str):
