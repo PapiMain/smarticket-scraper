@@ -172,14 +172,15 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
             "websiteKey": site_key
         }
         chosen = "TurnstileTaskProxyless (Cloudflare Turnstile)"
-    else:
-        # ✅ Proper AntiTurnstileTask without passing websiteKey
+    elif captcha_type == "anti_turnstile":
         task = {
             "type": "AntiTurnstileTask",
             "websiteURL": site_url
         }
         chosen = "AntiTurnstileTask (managed challenge, no sitekey)"
-        print("⚠️ No sitekey detected — using AntiTurnstileTask fallback")
+    else:
+        raise Exception("❌ No valid captcha_type or site_key detected for CapSolver")
+
 
     print(f"🔧 Creating CapSolver task: {chosen}")
 
@@ -296,7 +297,13 @@ def handle_captcha(driver, name, is_captcha):
             print("⚠️ No Turnstile iframe or data-sitekey appeared after waiting, will use fallback")
             save_debug(driver, name, "no_sitekey")
 
-        token = solve_captcha(site_url, site_key, captcha_type="turnstile")
+        if site_key:
+            captcha_type = "turnstile"
+        else:
+            captcha_type = "anti_turnstile"  # force proper fallback for Friends site
+            print("⚠️ No Turnstile or sitekey detected, using AntiTurnstileTask")
+
+        token = solve_captcha(site_url, site_key, captcha_type=captcha_type)
         print("✅ Got Turnstile token:", token[:40], "...")
 
         # Inject into hidden input
