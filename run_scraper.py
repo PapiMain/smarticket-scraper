@@ -154,8 +154,8 @@ def is_captcha_page(driver, show_name="unknown"):
        "cf-challenge" in html or \
        "verifying" in html:
         print(f"⚠️ CAPTCHA elements detected for '{show_name}'")
-        print("ℹ️ Page title:", title)
-        print("ℹ️ First 500 chars of HTML:", html[:500])
+        # print("ℹ️ Page title:", title)
+        # print("ℹ️ First 500 chars of HTML:", html[:500])
         # save_debug(driver, show_name, "captcha")
         return True
 
@@ -412,7 +412,7 @@ def handle_captcha(driver, name, is_captcha):
         # Determine the best solving strategy
         page_title = driver.title.lower()
 
-        if "just a moment..." in page_title and not site_key:
+        if "just a moment..." in page_title:
             # This is the full-page challenge, which often does not need a sitekey
             captcha_type = "anti_turnstile"
             site_key = None # Explicitly discard any potential false positive sitekey
