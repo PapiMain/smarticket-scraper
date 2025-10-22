@@ -577,7 +577,7 @@ def update_sheet_with_shows(show, site_tab):
 
     scraped_date = datetime.strptime(show["date"], "%d/%m/%Y").date()
     israel_tz = pytz.timezone("Asia/Jerusalem")
-    now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M:%S')
+    now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M')
 
     # Determine the organization based on site
     org_map = {"Papi": "סמארטיקט", "Friends": "פרינדס"}
