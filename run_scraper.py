@@ -676,5 +676,5 @@ def scrape_site(site_config):
         driver.quit()
 
 # Run daily scrapers
-for site in ["friends", "papi"]:
+for site in [ "papi"]:
     scrape_site(SITES[site])
