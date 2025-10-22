@@ -1,8 +1,9 @@
 name: Smarticket Scraper
 
 on:
-  # schedule:
-  #   - cron: "0 4 * * *" # Runs every day at 07:00 Israel time (UTC+3)
+  schedule:
+    - cron: "0 4 * * *" # Runs every day at 07:00 Israel time (UTC+3)
+    - cron: "0 11 * * *" # 2 PM Israel time
   workflow_dispatch: # Allows manual run from GitHub UI
 
 jobs:
