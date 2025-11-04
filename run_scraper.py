@@ -470,13 +470,13 @@ def handle_captcha(driver, name, is_captcha):
 
 # Parse Hebrew date string
 def parse_hebrew_date(date_str):
-   """
+    """
     Convert Hebrew date strings like:
     'ביום שבת, 15 בנובמבר 2025' → '15/11/2025'
     'יום רביעי, 17 ספטמבר 2025' → '17/09/2025'
     """
     try:
-         # Remove leading 'ביום' or 'יום' and any commas
+        # Remove leading 'ביום' or 'יום' and any commas
         clean = re.sub(r"ביום\s+|יום\s+|,", "", date_str).strip()
 
         # Extract numeric day, month (with optional prefix ב), and year
@@ -489,7 +489,7 @@ def parse_hebrew_date(date_str):
         year = int(match.group(3))
 
         month = HEBREW_MONTHS.get(month_name)
-         if not month:
+        if not month:
             raise ValueError(f"Unknown Hebrew month: {month_name}")
 
         return datetime(year, month, day).strftime("%d/%m/%Y")
