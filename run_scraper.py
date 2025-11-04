@@ -470,26 +470,30 @@ def handle_captcha(driver, name, is_captcha):
 
 # Parse Hebrew date string
 def parse_hebrew_date(date_str):
-    """
-    Convert Hebrew date string like 'יום רביעי, 17 ספטמבר 2025' into 'dd/mm/yyyy'
+   """
+    Convert Hebrew date strings like:
+    'ביום שבת, 15 בנובמבר 2025' → '15/11/2025'
+    'יום רביעי, 17 ספטמבר 2025' → '17/09/2025'
     """
     try:
-        # Remove the day name and comma
-        parts = date_str.split(",")
-        if len(parts) == 2:
-            date_part = parts[1].strip()  # e.g., "17 ספטמבר 2025"
-        else:
-            date_part = date_str.strip()
+         # Remove leading 'ביום' or 'יום' and any commas
+        clean = re.sub(r"ביום\s+|יום\s+|,", "", date_str).strip()
 
-        day, month_name, year = date_part.split()
-        day = int(day)
+        # Extract numeric day, month (with optional prefix ב), and year
+        match = re.search(r"(\d{1,2})\s+ב?([א-ת]+)\s+(\d{4})", clean)
+        if not match:
+            raise ValueError(f"Cannot parse Hebrew date: {date_str}")
+
+        day = int(match.group(1))
+        month_name = match.group(2)
+        year = int(match.group(3))
+
         month = HEBREW_MONTHS.get(month_name)
-        year = int(year)
+         if not month:
+            raise ValueError(f"Unknown Hebrew month: {month_name}")
 
-        if month:
-            return datetime(year, month, day).strftime("%d/%m/%Y")
-        else:
-            return date_str  # fallback if month not found
+        return datetime(year, month, day).strftime("%d/%m/%Y")
+
     except Exception as e:
         print(f"⚠️ Failed to parse date '{date_str}': {e}")
         return date_str
