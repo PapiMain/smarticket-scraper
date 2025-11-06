@@ -566,7 +566,11 @@ def count_empty_seats(driver):
         return 0
 
 def update_sheet_with_shows(show, site_tab):
-    """Update Google Sheet with available seats for a show."""
+    """
+    Batch update Google Sheet with available seats for multiple shows.
+    `shows` should be a list of dicts, each with keys: name, date, available_seats.
+    """
+    # --- Connect to Google Sheets ---
     service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
@@ -576,10 +580,16 @@ def update_sheet_with_shows(show, site_tab):
     data = sheet.get_all_records()
     headers = sheet.row_values(1)
 
-    available_col = headers.index("נמכרו") + 1  # Or whichever column you want to update
-    updated_col = headers.index("עודכן לאחרונה") + 1
+    # --- Get column indices ---
+    col_idx = {
+        "sold": headers.index("נמכרו") + 1,
+        "updated": headers.index("עודכן לאחרונה") + 1,
+        "title": headers.index("הפקה"),
+        "date": headers.index("תאריך"),
+        "org": headers.index("ארגון"),
+        "received": headers.index("קיבלו")
+    }
 
-    scraped_date = datetime.strptime(show["date"], "%d/%m/%Y").date()
     israel_tz = pytz.timezone("Asia/Jerusalem")
     now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M')
 
@@ -587,37 +597,60 @@ def update_sheet_with_shows(show, site_tab):
     org_map = {"Papi": "סמארטיקט", "Friends": "פרינדס"}
     org_value = org_map.get(site_tab, "")
 
-    updated = False
-
-    for i, row in enumerate(data, start=2):  # row 1 = headers
+    # --- Prepare batch updates ---
+    updates = []
+    
+    for show in shows:
         try:
-            row_date = row["תאריך"]
-            if isinstance(row_date, str):
-                try:
-                    row_date = datetime.strptime(row_date, "%d/%m/%Y").date()
-                except:
-                    continue
-            elif isinstance(row_date, datetime):
-                row_date = row_date.date()
+            scraped_date = datetime.strptime(show["date"], "%d/%m/%Y").date()
 
-            # Flexible title matching
-            title_match = (show["name"].strip() in row["הפקה"].strip()
-                           or row["הפקה"].strip() in show["name"].strip())
+            for i, row in enumerate(data, start=2):  # Row 1 = headers
+                row_date = row["תאריך"]
+                if isinstance(row_date, str):
+                    try:
+                        row_date = datetime.strptime(row_date, "%d/%m/%Y").date()
+                    except:
+                        continue
+                elif isinstance(row_date, datetime):
+                    row_date = row_date.date()
 
-            if title_match and row_date == scraped_date and row["ארגון"].strip() == org_value:
-                # Update sold or available seats
-                sold = int(row.get("קיבלו", 0)) - int(show.get("available_seats", 0))
-                sheet.update_cell(i, available_col, sold)
-                sheet.update_cell(i, updated_col, now_israel)
-                updated = True
-                print(f"✅ Updated row {i}: {show['name']} - Sold = {sold}")
-                break
+                # Flexible title matching
+                title_match = (
+                    show["name"].strip() in row["הפקה"].strip() or
+                    row["הפקה"].strip() in show["name"].strip()
+                )
+
+                if title_match and row_date == scraped_date and row["ארגון"].strip() == org_value:
+                    try:
+                        sold = int(row.get("קיבלו", 0)) - int(show.get("available_seats", 0))
+                    except:
+                        sold = ""
+
+                    # Add this row to batch updates
+                    updates.append({
+                        "range": f"{sheet.title}!{gspread.utils.rowcol_to_a1(i, col_idx['sold'])}",
+                        "values": [[sold]]
+                    })
+                    updates.append({
+                        "range": f"{sheet.title}!{gspread.utils.rowcol_to_a1(i, col_idx['updated'])}",
+                        "values": [[now_israel]]
+                    })
+                    print(f"✅ Queued update for row {i}: {show['name']} (Sold={sold})")
+                    break
 
         except Exception as e:
-            print(f"⚠️ Error parsing row {i}: {e}")
+            print(f"⚠️ Error processing show {show.get('name')}: {e}")
 
-    if not updated:
-        print(f"❌ No matching row found for {show['name']} on {show['date']}")
+    # --- Execute batch update ---
+    if updates:
+        sheet.batch_update(updates)
+        print(f"🚀 Batch update completed ({len(updates)//2} rows updated)")
+    else:
+        print("❌ No matching rows found to update.")
+        
+   # old print but now it doesnt show what wast updated (keep to change later)
+    # if not updated:
+    #     print(f"❌ No matching row found for {show['name']} on {show['date']}")
 
 def scrape_site(site_config):
     base_url = site_config["base_url"]
