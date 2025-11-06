@@ -565,7 +565,7 @@ def count_empty_seats(driver):
         print(f"❌ Error counting empty seats: {e}")
         return 0
 
-def update_sheet_with_shows(show, site_tab):
+def update_sheet_with_shows(shows, site_tab):
     """
     Batch update Google Sheet with available seats for multiple shows.
     `shows` should be a list of dicts, each with keys: name, date, available_seats.
@@ -697,7 +697,7 @@ def scrape_site(site_config):
                         show["available_seats"] = available
                         print(f"🎫 Available seats for {show['name']} on {show['date']}: {available}")
                         # Update Google Sheet
-                        update_sheet_with_shows(show, sheet_tab)
+                        update_sheet_with_shows([show], sheet_tab)
                     except Exception as seat_e:
                         print(f"❌ Error counting seats for {show.get('name','?')}: {seat_e}")
                         show["available_seats"] = None
