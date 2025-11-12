@@ -665,7 +665,8 @@ def scrape_site(site_config):
         short_names = get_short_names()
         print(f"🔎 Loaded {len(short_names)} short names")
 
-        for name in short_names[:5]:  # first 5 for testing
+        # for name in short_names[:5]:  # first 5 for testing
+        for name in short_names:  # first 5 for testing
             print(f"➡️ Searching for: {name}")
 
             # Encode the show name for the URL
