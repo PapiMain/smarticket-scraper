@@ -628,13 +628,14 @@ def update_sheet_with_shows(shows, site_tab):
 
                     # Add this row to batch updates
                     updates.append({
-                        "range": f"{sheet.title}!{gspread.utils.rowcol_to_a1(i, col_idx['sold'])}",
+                        "range": gspread.utils.rowcol_to_a1(i, col_idx['sold']),
                         "values": [[sold]]
                     })
                     updates.append({
-                        "range": f"{sheet.title}!{gspread.utils.rowcol_to_a1(i, col_idx['updated'])}",
+                        "range": gspread.utils.rowcol_to_a1(i, col_idx['updated']),
                         "values": [[now_israel]]
                     })
+                    
                     print(f"✅ Queued update for row {i}: {show['name']} (Sold={sold})")
                     break
 
