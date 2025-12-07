@@ -702,7 +702,6 @@ def scrape_site(site_config):
         short_names = get_short_names()
         print(f"🔎 Loaded {len(short_names)} short names")
         
-        all_shows_to_update = []
         
         # for name in short_names[:5]:  # first 5 for testing
         for name in short_names:
@@ -728,6 +727,7 @@ def scrape_site(site_config):
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
 
+                all_shows_to_update = []
                 urls = get_show_urls(driver)
                 
                 for url in urls:
