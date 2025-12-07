@@ -551,6 +551,43 @@ def extract_show_details(driver, url):
 
     return show
 
+def select_area(driver):
+    """
+    Smarticket sometimes loads an AREA SELECTION table before the seat map.
+    This function clicks the 'אולם' area (or the first available area),
+    so the seat map becomes visible.
+    """
+
+    try:
+        # Wait up to 5 sec for the areas table (if not found → no area selection)
+        rows = WebDriverWait(driver, 5).until(
+            EC.presence_of_all_elements_located(
+                (By.CSS_SELECTOR, "table.areas tr.area")
+            )
+        )
+    except:
+        # No area table → continue normally
+        return
+
+    # Try to click specifically the "אולם"
+    for row in rows:
+        cols = row.find_elements(By.TAG_NAME, "td")
+        if not cols:
+            continue
+
+        area_name = cols[0].text.strip()
+
+        if area_name == "אולם":
+            button = row.find_element(By.CSS_SELECTOR, "input.button")
+            driver.execute_script("arguments[0].click();", button)
+            print("🟦 Selected area: אולם")
+            return
+
+    # If no “אולם” found → click the first one
+    first_button = rows[0].find_element(By.CSS_SELECTOR, "input.button")
+    driver.execute_script("arguments[0].click();", first_button)
+    print("🟦 Selected first area (fallback)")
+    
 # Count empty seats in the chair_map table
 def count_empty_seats(driver):
     """Count the number of empty seats in the chair_map table."""
@@ -664,9 +701,11 @@ def scrape_site(site_config):
         # Load show names from Google Sheets
         short_names = get_short_names()
         print(f"🔎 Loaded {len(short_names)} short names")
-
+        
+        all_shows_to_update = []
+        
         # for name in short_names[:5]:  # first 5 for testing
-        for name in short_names:  # first 5 for testing
+        for name in short_names:
             print(f"➡️ Searching for: {name}")
 
             # Encode the show name for the URL
@@ -695,11 +734,14 @@ def scrape_site(site_config):
                     show = extract_show_details(driver, url)
 
                     try:
+                        select_area(driver)
                         available = count_empty_seats(driver)
                         show["available_seats"] = available
+                        all_shows_to_update.append(show)
                         print(f"🎫 Available seats for {show['name']} on {show['date']}: {available}")
                         # Update Google Sheet
-                        update_sheet_with_shows([show], sheet_tab)
+                        # update_sheet_with_shows([show], sheet_tab)
+                        update_sheet_with_shows(all_shows_to_update, sheet_tab)
                     except Exception as seat_e:
                         print(f"❌ Error counting seats for {show.get('name','?')}: {seat_e}")
                         show["available_seats"] = None
