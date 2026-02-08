@@ -46,6 +46,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: run-scraper
     if: ${{ github.event_name == 'schedule' }} # only run automatically, not on manual trigger
+    permissions:
+      contents: write
     steps:
       - name: 🌀 Checkout repo
         uses: actions/checkout@v4
