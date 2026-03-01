@@ -500,13 +500,17 @@ def parse_hebrew_date(date_str):
 
 # Step 1: Get all show URLs from the search results
 def get_show_urls(driver):
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
-    )
-    show_elements = driver.find_elements(By.CSS_SELECTOR, "a.show")
-    urls = [el.get_attribute("href") for el in show_elements if el.get_attribute("href")]
-    print(f"✅ Found {len(urls)} show URLs")
-    return urls
+    try:
+        WebDriverWait(driver, 5).until(
+            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
+        )
+        show_elements = driver.find_elements(By.CSS_SELECTOR, "a.show")
+        urls = [el.get_attribute("href") for el in show_elements if el.get_attribute("href")]
+        print(f"✅ Found {len(urls)} show URLs")
+        return urls
+    except TimeoutException:
+        print("ℹ️ No shows found for this search.")
+        return []
 
 # Step 2: Extract show details from an individual show page
 def extract_show_details(driver, url):
@@ -696,14 +700,15 @@ def scrape_site(site_config):
     print(f"🌐 Starting scraper for site: {sheet_tab} ({base_url})")
 
     driver = get_driver()
+    
+    # 1. This list must be outside the loops to collect EVERYTHING
+    all_shows_to_update = []
 
     try:
         # Load show names from Google Sheets
         short_names = get_short_names()
         print(f"🔎 Loaded {len(short_names)} short names")
         
-        
-        # for name in short_names[:5]:  # first 5 for testing
         for name in short_names:
             print(f"➡️ Searching for: {name}")
 
@@ -713,47 +718,54 @@ def scrape_site(site_config):
             try:
                 driver.get(search_url)
 
+                # Check for CAPTCHA
                 is_captcha = is_captcha_page(driver, name)
-
                 if is_captcha:
                     solved = handle_captcha(driver, name, True)
                     if not solved:
                         print(f"⚠️ Skipping '{name}' because CAPTCHA could not be solved.")
-                        continue  # skip this show
+                        continue 
                 else:
                     print(f"ℹ️ No CAPTCHA detected for '{name}'")
 
-                
                 print(f"✅ Finished search for: {name}")
                 print("🌍 Current URL:", driver.current_url)
-
-                all_shows_to_update = []
+                
+                # 2. Get URLs with a safety check so it doesn't crash if 0 shows are found
                 urls = get_show_urls(driver)
                 
+                # 3. Process each URL found for this specific search name
                 for url in urls:
                     show = extract_show_details(driver, url)
+                    if not show.get("name"): # Skip if extraction failed
+                        continue
 
                     try:
                         select_area(driver)
                         available = count_empty_seats(driver)
                         show["available_seats"] = available
+                        
+                        # Add the individual show results to our master list
                         all_shows_to_update.append(show)
                         print(f"🎫 Available seats for {show['name']} on {show['date']}: {available}")
-                        # Update Google Sheet
-                        # update_sheet_with_shows([show], sheet_tab)
-                        update_sheet_with_shows(all_shows_to_update, sheet_tab)
+                        
                     except Exception as seat_e:
                         print(f"❌ Error counting seats for {show.get('name','?')}: {seat_e}")
                         show["available_seats"] = None
 
             except Exception as inner_e:
-                print(f"❌ Error on show '{name}': {inner_e}")
-                # Save a screenshot with the show name
-                save_debug(driver, name, "captcha")
+                print(f"❌ Error during search/process for '{name}': {inner_e}")
+                save_debug(driver, name, "error_loop")
 
-    except Exception as e:
-        print(f"❌ Error while scraping {base_url}: {e}")
+        # 4. CRITICAL: The update happens AFTER all searches are finished
+        if all_shows_to_update:
+            print(f"🚀 Found {len(all_shows_to_update)} total shows. Starting Batch Update to Google Sheets...")
+            update_sheet_with_shows(all_shows_to_update, sheet_tab)
+        else:
+            print("❌ No show data collected. Nothing to update.")
+
     finally:
+        print("🏁 Scraper finished. Closing browser.")
         driver.quit()
 
 # Run daily scrapers
