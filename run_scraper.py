@@ -8,16 +8,12 @@ from selenium.common.exceptions import TimeoutException
 import time
 import os
 import json
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from urllib.parse import quote
 from urllib.parse import urlparse, parse_qs
 import requests
 from datetime import datetime
 import pytz
 import re
-
-
 
 SITES = {
     "friends": {
@@ -46,17 +42,41 @@ HEBREW_MONTHS = {
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
-# Load Google Sheets credentials from environment variable
-def get_short_names():
-    service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-    client = gspread.authorize(creds)
+def get_appsheet_data(table_name):
+    """Generic function to read a table from AppSheet."""
+    app_id = os.environ.get("APPSHEET_APP_ID")
+    app_key = os.environ.get("APPSHEET_APP_KEY")
     
+    url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
+    
+    headers = {"ApplicationAccessKey": app_key}
+    body = {
+        "Action": "Find",
+        "Properties": {"Locale": "en-US"},
+        "Rows": []
+    }
+    
+    try:
+        response = requests.post(url, json=body, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        print(f"❌ AppSheet API Error ({table_name}): {response.text}")
+        return []
+    except Exception as e:
+        print(f"❌ Connection Error fetching {table_name}: {e}")
+        return []
 
-    sheet = client.open("דאטה אפשיט אופיס").worksheet("הפקות")
-    short_names = sheet.col_values(2)  # for example, if "שם מקוצר" is column B
-    return [name for name in short_names if name and name != "שם מקוצר"]
+def get_short_names():
+    """Uses the generic AppSheet fetcher to get show names."""
+    print("⏳ Fetching show names from AppSheet 'הפקות' table...")
+    rows = get_appsheet_data("הפקות")
+    
+    # Extract 'שם מקוצר' (Short Name) from the results
+    # We check if 'שם מקוצר' exists in the row to avoid errors
+    short_names = [row["שם מקוצר"] for row in rows if row.get("שם מקוצר")]
+    
+    print(f"🔎 Found {len(short_names)} names to search.")
+    return short_names
 
 # Set up Selenium WebDriver
 def get_driver():
@@ -606,93 +626,88 @@ def count_empty_seats(driver):
         print(f"❌ Error counting empty seats: {e}")
         return 0
 
-def update_sheet_with_shows(shows, site_tab):
-    """
-    Batch update Google Sheet with available seats for multiple shows.
-    `shows` should be a list of dicts, each with keys: name, date, available_seats.
-    """
-    # --- Connect to Google Sheets ---
-    service_account_info = json.loads(os.environ["GOOGLE_SERVICE_ACCOUNT"])
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
-    client = gspread.authorize(creds)
-
-    sheet = client.open("דאטה אפשיט אופיס").worksheet("כרטיסים")
-    data = sheet.get_all_records()
-    headers = sheet.row_values(1)
-
-    # --- Get column indices ---
-    col_idx = {
-        "sold": headers.index("נמכרו") + 1,
-        "updated": headers.index("עודכן לאחרונה") + 1,
-        "title": headers.index("הפקה"),
-        "date": headers.index("תאריך"),
-        "org": headers.index("ארגון"),
-        "received": headers.index("קיבלו")
-    }
-
+def update_appsheet_batch(shows, site_tab):
+    """Matches scraped shows to AppSheet rows using ID and updates them."""
+    app_id = os.environ.get("APPSHEET_APP_ID")
+    app_key = os.environ.get("APPSHEET_APP_KEY")
+    
+    # 1. Fetch current data to find the IDs
+    print("⏳ Fetching current AppSheet data to match IDs...")
+    current_rows = get_appsheet_data("כרטיסים")
+    
     israel_tz = pytz.timezone("Asia/Jerusalem")
     now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M')
+    org_value = "סמארטיקט" if site_tab == "Papi" else "פרינדס"
 
-    # Determine the organization based on site
-    org_map = {"Papi": "סמארטיקט", "Friends": "פרינדס"}
-    org_value = org_map.get(site_tab, "")
-
-    # --- Prepare batch updates ---
     updates = []
-    
+
     for show in shows:
         try:
-            scraped_date = datetime.strptime(show["date"], "%d/%m/%Y").date()
+            scraped_date_obj = datetime.strptime(show["date"], "%d/%m/%Y").date()
+        except:
+            continue
+        # scraped_date = show["date"] # Assuming format 'DD/MM/YYYY'
+        scraped_name = show["name"].strip()
 
-            for i, row in enumerate(data, start=2):  # Row 1 = headers
-                row_date = row["תאריך"]
-                if isinstance(row_date, str):
-                    try:
-                        row_date = datetime.strptime(row_date, "%d/%m/%Y").date()
-                    except:
-                        continue
-                elif isinstance(row_date, datetime):
-                    row_date = row_date.date()
+        # 2. Find the ID in AppSheet that matches this show
+        match = None
+        for row in current_rows:
+            app_date_raw = row.get("תאריך")
+            if not app_date_raw: continue
 
-                # Flexible title matching
-                title_match = (
-                    show["name"].strip() in row["הפקה"].strip() or
-                    row["הפקה"].strip() in show["name"].strip()
-                )
-
-                if title_match and row_date == scraped_date and row["ארגון"].strip() == org_value:
-                    try:
-                        sold = int(row.get("קיבלו", 0)) - int(show.get("available_seats", 0))
-                    except:
-                        sold = ""
-
-                    # Add this row to batch updates
-                    updates.append({
-                        "range": gspread.utils.rowcol_to_a1(i, col_idx['sold']),
-                        "values": [[sold]]
-                    })
-                    updates.append({
-                        "range": gspread.utils.rowcol_to_a1(i, col_idx['updated']),
-                        "values": [[now_israel]]
-                    })
-                    
-                    print(f"✅ Queued update for row {i}: {show['name']} (Sold={sold})")
+            # Date Format Guesser: AppSheet might send YYYY-MM-DD or MM/DD/YYYY
+            app_date_obj = None
+            for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+                try:
+                    app_date_obj = datetime.strptime(app_date_raw, fmt).date()
                     break
+                except: continue
 
-        except Exception as e:
-            print(f"⚠️ Error processing show {show.get('name')}: {e}")
+            if not app_date_obj: continue
 
-    # --- Execute batch update ---
-    if updates:
-        sheet.batch_update(updates)
-        print(f"🚀 Batch update completed ({len(updates)//2} rows updated)")
-    else:
-        print("❌ No matching rows found to update.")
+            # Comparison (Name + Date + Org)
+            row_name = row.get("הפקה", "").strip()
+
+            # Match by Name, Date, and Organization
+            if (scraped_name in row_name or row_name in scraped_name) and \
+               app_date_obj == scraped_date_obj and \
+               row.get("ארגון") == org_value:
+                match = row
+                break
         
-   # old print but now it doesnt show what wast updated (keep to change later)
-    # if not updated:
-    #     print(f"❌ No matching row found for {show['name']} on {show['date']}")
+        if match:
+            # Calculate 'נמכרו' (Sold) logic
+            try:
+                total_capacity = int(match.get("קיבלו", 0))
+                available = int(show.get("available_seats", 0))
+                sold = total_capacity - available
+
+                # Add to update list - MUST include the 'ID' key
+                updates.append({
+                    "ID": match["ID"], 
+                    "נמכרו": sold,
+                    "עודכן לאחרונה": now_israel
+                })
+                print(f"✅ Prepared update for {scraped_name}: sold-{sold}, ID {match['ID']}")
+            except Exception as e:
+                print(f"❌ Calculation error for {scraped_name}: {e}")
+
+        
+    # 3. Send Batch Edit to AppSheet
+    if updates:
+        url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/כרטיסים/Action"
+        body = {
+            "Action": "Edit",
+            "Properties": {"Locale": "en-US"},
+            "Rows": updates
+        }
+        resp = requests.post(url, json=body, headers={"ApplicationAccessKey": app_key})
+        print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
+        if resp.status_code != 200:
+            print(f"❌ AppSheet Update Error: {resp.text}")
+    else:
+        print("❌ No matching rows found in AppSheet.")
+
 
 def scrape_site(site_config):
     base_url = site_config["base_url"]
@@ -760,7 +775,7 @@ def scrape_site(site_config):
         # 4. CRITICAL: The update happens AFTER all searches are finished
         if all_shows_to_update:
             print(f"🚀 Found {len(all_shows_to_update)} total shows. Starting Batch Update to Google Sheets...")
-            update_sheet_with_shows(all_shows_to_update, sheet_tab)
+            update_appsheet_batch(all_shows_to_update, sheet_tab)
         else:
             print("❌ No show data collected. Nothing to update.")
 
@@ -771,3 +786,4 @@ def scrape_site(site_config):
 # Run daily scrapers
 for site in [ "papi"]:
     scrape_site(SITES[site])
+
