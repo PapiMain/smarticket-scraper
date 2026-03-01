@@ -51,7 +51,9 @@ def get_appsheet_data(table_name):
     body = {
         "Action": "Find",
         "Properties": {"Locale": "he-IL"},
-        "Rows": [] 
+        "Rows": [
+            { "שם מקוצר": "סימבה" }
+        ] 
     }
     
     try:
