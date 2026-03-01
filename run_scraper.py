@@ -48,34 +48,32 @@ def get_appsheet_data(table_name):
     url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
     
     headers = {"ApplicationAccessKey": app_key, "Content-Type": "application/json"}
+    
+    # We are providing the 'Properties' but leaving Rows out 
+    # to see if it triggers the 'Select All' behavior correctly now
     body = {
         "Action": "Find",
-        "Properties": {"Locale": "he-IL"},
-        "Rows": [
-            { "שם מקוצר": "סימבה" }
-        ] 
+        "Properties": {
+            "Locale": "he-IL",
+            "Timezone": "Israel Standard Time"
+        },
+        "Rows": []
     }
     
     try:
         response = requests.post(url, json=body, headers=headers, timeout=30)
         data = response.json()
-
-        # DEBUG: Let's see EXACTLY what AppSheet is sending back
-        print(f"DEBUG: Raw response for {table_name}: {data}")
-
-        if isinstance(data, list):
-            return data
         
-        if isinstance(data, dict):
-            # Check all possible data keys in AppSheet's API
-            rows = data.get("Rows") or data.get("RowValues") or data.get("rows")
-            if rows:
-                return rows
-            
-            if data.get("Success") is True:
-                print(f"❓ API connected, but no rows found in '{table_name}'.")
-                return []
+        # LOGGING EVERYTHING AGAIN
+        print(f"DEBUG: API Response: {data}")
 
+        # If it still says 'Row key field missing', we need to 
+        # specifically ask for the 'שם הפקה מלא' column.
+        if isinstance(data, dict) and data.get("RowValues"):
+            return data["RowValues"]
+        elif isinstance(data, list):
+            return data
+            
         return []
     except Exception as e:
         print(f"❌ API Request failed: {e}")
@@ -84,7 +82,8 @@ def get_appsheet_data(table_name):
 def get_short_names():
     """Uses the generic AppSheet fetcher to get show names."""
     print("⏳ Fetching show names from AppSheet 'הפקות' table...")
-    rows = get_appsheet_data("הפקות")
+    # rows = get_appsheet_data("הפקות")
+    rows = get_appsheet_data("%D7%94%D7%A4%D7%A7%D7%95%D7%AA")  # URL-encoded 'הפקות'
     
     if not rows:
         print("⚠️ No data returned from AppSheet 'הפקות'.")
