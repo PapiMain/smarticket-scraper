@@ -43,58 +43,40 @@ HEBREW_MONTHS = {
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
 def get_appsheet_data(table_name):
-    """Generic function to read a table from AppSheet."""
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
-    
-    # Ensure the table name is URL-encoded for Hebrew characters
     url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
     
-    headers = {
-        "ApplicationAccessKey": app_key,
-        "Content-Type": "application/json"
-    }
-    
-    # Per documentation: For "Find", if you want ALL rows, 
-    # some AppSheet versions prefer NO "Rows" key at all.
+    headers = {"ApplicationAccessKey": app_key, "Content-Type": "application/json"}
     body = {
         "Action": "Find",
-        "Properties": {
-            "Locale": "he-IL",
-            "Timezone": "Israel Standard Time"
-        }
-        # Removed "Rows": [] to trigger 'Select All'
+        "Properties": {"Locale": "he-IL"},
+        "Rows": [] 
     }
     
     try:
         response = requests.post(url, json=body, headers=headers, timeout=30)
-        
-        if response.status_code != 200:
-            print(f"❌ HTTP {response.status_code}: {response.text}")
-            return []
-
         data = response.json()
 
-        # Handle both list and dictionary (RowValues) responses
+        # DEBUG: Let's see EXACTLY what AppSheet is sending back
+        print(f"DEBUG: Raw response for {table_name}: {data}")
+
         if isinstance(data, list):
             return data
         
         if isinstance(data, dict):
-            # Try both common result keys
-            rows = data.get("Rows") or data.get("RowValues")
+            # Check all possible data keys in AppSheet's API
+            rows = data.get("Rows") or data.get("RowValues") or data.get("rows")
             if rows:
                 return rows
             
             if data.get("Success") is True:
-                print(f"❓ AppSheet says Success but returned 0 rows for '{table_name}'.")
-                # This usually means the API is pointing to a different version/slice
+                print(f"❓ API connected, but no rows found in '{table_name}'.")
                 return []
 
-        print(f"⚠️ Unexpected response format: {data}")
         return []
-
     except Exception as e:
-        print(f"❌ Request failed: {e}")
+        print(f"❌ API Request failed: {e}")
         return []
         
 def get_short_names():
