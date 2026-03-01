@@ -43,19 +43,24 @@ HEBREW_MONTHS = {
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
 def get_appsheet_data(table_name):
+    """Fetches all rows from a specific AppSheet table using a Selector filter."""
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
     url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
     
-    headers = {"ApplicationAccessKey": app_key, "Content-Type": "application/json"}
+    headers = {
+        "ApplicationAccessKey": app_key,
+        "Content-Type": "application/json"
+    }
     
-    # We are providing the 'Properties' but leaving Rows out 
-    # to see if it triggers the 'Select All' behavior correctly now
+    # This 'Selector' tells AppSheet: "Run a query on [table_name] where 1=1 (True)"
+    # This is the standard way to bypass the 'Missing Key' error when you want all data.
     body = {
         "Action": "Find",
         "Properties": {
             "Locale": "he-IL",
-            "Timezone": "Israel Standard Time"
+            "Timezone": "Israel Standard Time",
+            "Selector": f"Filter('{table_name}', True)" 
         },
         "Rows": []
     }
@@ -64,19 +69,25 @@ def get_appsheet_data(table_name):
         response = requests.post(url, json=body, headers=headers, timeout=30)
         data = response.json()
         
-        # LOGGING EVERYTHING AGAIN
-        print(f"DEBUG: API Response: {data}")
+        # Keep this for one more run so we can verify the 'Tickets' table response too
+        print(f"DEBUG: Response for {table_name}: {data}")
 
-        # If it still says 'Row key field missing', we need to 
-        # specifically ask for the 'שם הפקה מלא' column.
-        if isinstance(data, dict) and data.get("RowValues"):
-            return data["RowValues"]
-        elif isinstance(data, list):
+        if isinstance(data, dict):
+            # AppSheet returns rows in 'RowValues' for the Find action
+            rows = data.get("RowValues")
+            if rows:
+                return rows
+            
+            if data.get("Success") is True:
+                print(f"ℹ️ Connected to '{table_name}', but it appears to be empty.")
+                return []
+        
+        if isinstance(data, list):
             return data
             
         return []
     except Exception as e:
-        print(f"❌ API Request failed: {e}")
+        print(f"❌ API Request failed for {table_name}: {e}")
         return []
         
 def get_short_names():
