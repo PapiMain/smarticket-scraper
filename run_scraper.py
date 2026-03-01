@@ -43,13 +43,12 @@ HEBREW_MONTHS = {
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
 def get_appsheet_data(table_name):
-    """Generic function to read a table from AppSheet."""
+    """Generic function to read a table from AppSheet with type checking."""
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
-    
     url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
     
-    headers = {"ApplicationAccessKey": app_key}
+    headers = {"ApplicationAccessKey": app_key, "Content-Type": "application/json"}
     body = {
         "Action": "Find",
         "Properties": {"Locale": "en-US"},
@@ -58,10 +57,22 @@ def get_appsheet_data(table_name):
     
     try:
         response = requests.post(url, json=body, headers=headers, timeout=30)
-        if response.status_code == 200:
-            return response.json()
-        print(f"❌ AppSheet API Error ({table_name}): {response.text}")
-        return []
+        
+        # Log the status code for debugging
+        if response.status_code != 200:
+            print(f"❌ AppSheet API Error ({table_name}) HTTP {response.status_code}: {response.text}")
+            return []
+
+        data = response.json()
+
+        # CRITICAL CHECK: Ensure 'data' is a list of rows
+        if isinstance(data, list):
+            return data
+        else:
+            print(f"⚠️ AppSheet returned unexpected format for {table_name}. Expected list, got: {type(data)}")
+            print(f"📦 Raw Response: {data}")
+            return []
+
     except Exception as e:
         print(f"❌ Connection Error fetching {table_name}: {e}")
         return []
@@ -71,13 +82,18 @@ def get_short_names():
     print("⏳ Fetching show names from AppSheet 'הפקות' table...")
     rows = get_appsheet_data("הפקות")
     
-    # Extract 'שם מקוצר' (Short Name) from the results
-    # We check if 'שם מקוצר' exists in the row to avoid errors
-    short_names = [row["שם מקוצר"] for row in rows if row.get("שם מקוצר")]
+    if not rows:
+        print("⚠️ No data returned from AppSheet 'הפקות'.")
+        return []
+    
+    # Standardize loop to ensure we are looking at dictionaries
+    short_names = []
+    for row in rows:
+        if isinstance(row, dict) and row.get("שם מקוצר"):
+            short_names.append(row["שם מקוצר"])
     
     print(f"🔎 Found {len(short_names)} names to search.")
     return short_names
-
 # Set up Selenium WebDriver
 def get_driver():
     options = Options()
