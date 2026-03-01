@@ -43,7 +43,7 @@ HEBREW_MONTHS = {
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
 def get_appsheet_data(table_name):
-    """Generic function to read a table from AppSheet with type checking."""
+    """Generic function to read a table from AppSheet, handling nested dictionary response."""
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
     url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
@@ -58,25 +58,35 @@ def get_appsheet_data(table_name):
     try:
         response = requests.post(url, json=body, headers=headers, timeout=30)
         
-        # Log the status code for debugging
         if response.status_code != 200:
             print(f"❌ AppSheet API Error ({table_name}) HTTP {response.status_code}: {response.text}")
             return []
 
         data = response.json()
 
-        # CRITICAL CHECK: Ensure 'data' is a list of rows
+        # Logic Fix: AppSheet usually returns a list of rows, 
+        # but sometimes a dict with a 'Rows' or 'RowValues' key.
         if isinstance(data, list):
             return data
-        else:
-            print(f"⚠️ AppSheet returned unexpected format for {table_name}. Expected list, got: {type(data)}")
-            print(f"📦 Raw Response: {data}")
-            return []
+        
+        if isinstance(data, dict):
+            # Check common keys where AppSheet stores the actual data
+            rows = data.get("Rows") or data.get("RowValues")
+            if rows is not None:
+                return rows
+            
+            # If the dict is empty or success but no rows found
+            if data.get("Success") == True:
+                print(f"ℹ️ AppSheet connected to '{table_name}', but returned 0 rows.")
+                return []
+
+        print(f"⚠️ Unexpected AppSheet format: {data}")
+        return []
 
     except Exception as e:
         print(f"❌ Connection Error fetching {table_name}: {e}")
         return []
-
+    
 def get_short_names():
     """Uses the generic AppSheet fetcher to get show names."""
     print("⏳ Fetching show names from AppSheet 'הפקות' table...")
@@ -94,6 +104,7 @@ def get_short_names():
     
     print(f"🔎 Found {len(short_names)} names to search.")
     return short_names
+
 # Set up Selenium WebDriver
 def get_driver():
     options = Options()
