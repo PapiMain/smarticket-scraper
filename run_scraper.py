@@ -7,7 +7,6 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException
 import time
 import os
-import json
 from urllib.parse import quote
 from urllib.parse import urlparse, parse_qs
 import requests
@@ -43,7 +42,7 @@ HEBREW_MONTHS = {
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
-
+# Helper function to fetch data from AppSheet using py-appsheet
 def get_appsheet_data(table_name):
     """Uses the py-appsheet library to fetch data with the correct arguments."""
     client = AppSheetClient(
@@ -67,7 +66,8 @@ def get_appsheet_data(table_name):
     except Exception as e:
         print(f"❌ py-appsheet error: {e}")
         return []
-        
+ 
+# This function is now focused solely on fetching the short names from the 'הפקות' table using the generic AppSheet client.    
 def get_short_names():
     """Uses the generic AppSheet fetcher to get show names."""
     print("⏳ Fetching show names from AppSheet 'הפקות' table...")
@@ -197,6 +197,7 @@ def is_captcha_page(driver, show_name="unknown"):
     print(f"✅ No CAPTCHA detected for '{show_name}'")
     return False
 
+# Heuristic function to find Turnstile sitekey using multiple strategies
 def find_turnstile_sitekey(driver, verbose=True):
     """
     Try multiple strategies to discover a Cloudflare Turnstile sitekey on the page.
@@ -419,6 +420,7 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
             continue
         raise Exception("❌ CAPTCHA solving timed out after retries")
 
+# Enhanced CAPTCHA handler that tries to find Turnstile sitekey and falls back to general Cloudflare Challenge if not found. It also saves debug info on failure.
 def handle_captcha(driver, name, is_captcha):
     """
     Improved handler:
@@ -584,6 +586,7 @@ def extract_show_details(driver, url):
 
     return show
 
+# Select area if area selection table appears (some shows require selecting an area before showing the seat map)
 def select_area(driver):
     """
     Smarticket sometimes loads an AREA SELECTION table before the seat map.
@@ -635,6 +638,7 @@ def count_empty_seats(driver):
         print(f"❌ Error counting empty seats: {e}")
         return 0
 
+# Step 3: Update AppSheet with the new availability data using the matched IDs
 def update_appsheet_batch(shows, site_tab):
     """Matches scraped shows to AppSheet rows using ID and updates them."""
     app_id = os.environ.get("APPSHEET_APP_ID")
@@ -701,19 +705,10 @@ def update_appsheet_batch(shows, site_tab):
                 print(f"✅ Prepared update for {scraped_name}: sold-{sold}, ID {match['ID']}")
             except Exception as e:
                 print(f"❌ Calculation error for {scraped_name}: {e}")
-
-        
+    
     # 3. Send Batch Edit to AppSheet
     if updates:
         num_updates = len(updates)
-        # try:
-        #     # client.call(table, action, rows) is the batch method for this library
-        #     client.call("כרטיסים", "Edit", updates)
-            
-        #     print(f"🚀 AppSheet Batch Update Status: Success")
-        #     print(f"✅ Successfully updated {num_updates} rows in the 'כרטיסים' table.")
-        # except Exception as e:
-        #     print(f"❌ AppSheet Update Error: {e}")
 
         url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/כרטיסים/Action"
         body = {
@@ -730,7 +725,7 @@ def update_appsheet_batch(shows, site_tab):
     else:
         print("❌ No matching rows found in AppSheet.")
 
-
+# Main scraper function for a given site configuration
 def scrape_site(site_config):
     base_url = site_config["base_url"]
     sheet_tab = site_config["sheet_tab"]
@@ -808,4 +803,3 @@ def scrape_site(site_config):
 # Run daily scrapers
 for site in [ "papi"]:
     scrape_site(SITES[site])
-
