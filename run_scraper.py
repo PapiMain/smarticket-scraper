@@ -97,25 +97,43 @@ def get_optimized_targets():
 
     for h in halls:
         raw_url = h.get("URL")
-        if raw_url:
-            hall_url_map[h.get("שם אולם")] = clean_url(raw_url)
+        hall_name = h.get("שם אולם")
+        if raw_url and hall_name:
+            hall_url_map[str(hall_name).strip()] = clean_url(raw_url)
 
     # 3. Build the hall-specific search list
     hall_targets = {}
+    print(f"📊 Processing {len(events)} events for hall targeting...")
+    skipped_no_url = 0
+    skipped_no_short_name = 0
+
     for e in events:
         hall_name = e.get("אולם")
         full_prod_name = e.get("הפקה")
         short_name = prod_name_to_short.get(full_prod_name)
         
         url = hall_url_map.get(hall_name)
-        if url and short_name and "smarticket.co.il" in url:
-            # Check if this is NOT one of the main aggregators
+
+        if not url:
+            skipped_no_url += 1
+            continue
+            
+        if not short_name:
+            skipped_no_short_name += 1
+            print(f"❓ Could not find short name for: '{full_prod_name}'") # Debug names
+            continue
+
+        if "smarticket.co.il" in url:
             if "papi.smarticket" not in url and "friends.smarticket" not in url:
-                # Ensure URL is a string before adding to dict
-                str_url = str(url) if url.endswith("/") else f"{url}/"
+                str_url = url if url.endswith("/") else f"{url}/"
                 if str_url not in hall_targets:
                     hall_targets[str_url] = set()
                 hall_targets[str_url].add(short_name)
+
+    print(f"✅ Targets generated!")
+    print(f"   - Halls to visit: {len(hall_targets)}")
+    print(f"   - Events skipped (No URL match): {skipped_no_url}")
+    print(f"   - Events skipped (No Production name match): {skipped_no_short_name}")
 
     return all_short_names, hall_targets
 
