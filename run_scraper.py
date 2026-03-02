@@ -75,9 +75,13 @@ def get_optimized_targets():
     - hall_targets: Dict { "hall_url": ["Short Name 1", ... ] } for specific halls.
     """
     productions = get_appsheet_data("הפקות")
-    events = get_appsheet_data("אירועים")
+    events = get_appsheet_data("אירועי עתיד")
     halls = get_appsheet_data("אולמות")
 
+    if not events:
+        print("⚠️ No future events found in 'אירועי עתיד'.")
+        return [], {}
+    
     # 1. Create a mapping of Full Production Name -> Short Name
     # (Since events table likely uses the full name)
     prod_name_to_short = {p.get("שם הפקה מלא"): p.get("שם מקוצר") for p in productions if p.get("שם הפקה מלא")}
@@ -97,9 +101,11 @@ def get_optimized_targets():
         if url and short_name and "smarticket.co.il" in url:
             # Check if this is NOT one of the main aggregators
             if "papi.smarticket" not in url and "friends.smarticket" not in url:
-                if url not in hall_targets:
-                    hall_targets[url] = set()
-                hall_targets[url].add(short_name)
+                # Ensure URL is a string before adding to dict
+                str_url = str(url) if url.endswith("/") else f"{url}/"
+                if str_url not in hall_targets:
+                    hall_targets[str_url] = set()
+                hall_targets[str_url].add(short_name)
 
     return all_short_names, hall_targets
 
@@ -853,6 +859,12 @@ def update_appsheet_batch(shows, site_tab):
 # Run daily scrapers
 # for site in [ "papi"]:
 #     scrape_site(SITES[site])
+
+def clean_url(url_data):
+    """Extracts the string URL if AppSheet returns a JSON object."""
+    if isinstance(url_data, dict):
+        return url_data.get("Url", "")
+    return str(url_data)
 
 def run_search_logic(driver, base_url, search_term, site_tag):
     """
