@@ -639,7 +639,8 @@ def update_appsheet_batch(shows, site_tab):
     """Matches scraped shows to AppSheet rows using ID and updates them."""
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
-    
+    client = AppSheetClient(app_id=app_id, api_key=app_key)
+
     # 1. Fetch current data to find the IDs
     print("⏳ Fetching current AppSheet data to match IDs...")
     current_rows = get_appsheet_data("כרטיסים")
@@ -704,16 +705,29 @@ def update_appsheet_batch(shows, site_tab):
         
     # 3. Send Batch Edit to AppSheet
     if updates:
-        url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/כרטיסים/Action"
-        body = {
-            "Action": "Edit",
-            "Properties": {"Locale": "en-US"},
-            "Rows": updates
-        }
-        resp = requests.post(url, json=body, headers={"ApplicationAccessKey": app_key})
-        print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
-        if resp.status_code != 200:
-            print(f"❌ AppSheet Update Error: {resp.text}")
+        num_updates = len(updates)
+        try:
+            # The library uses 'update_items' for the "Edit" action
+            # It handles the URL, Headers, and JSON structure for you
+            result = client.update_items(table="כרטיסים", items=updates)
+            
+            print(f"🚀 AppSheet Batch Update Status: Success")
+            print(f"✅ Successfully updated {num_updates} rows in the 'כרטיסים' table.")
+        except Exception as e:
+            print(f"❌ AppSheet Update Error: {e}")
+
+        # url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/כרטיסים/Action"
+        # body = {
+        #     "Action": "Edit",
+        #     "Properties": {"Locale": "en-US"},
+        #     "Rows": updates
+        # }
+        # resp = requests.post(url, json=body, headers={"ApplicationAccessKey": app_key})
+        # print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
+        # print(f"✅ Successfully updated {num_updates} rows in the 'כרטיסים' table.")
+        # if resp.status_code != 200:
+        #     print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
+        #     print(f"❌ AppSheet Update Error: {resp.text}")
     else:
         print("❌ No matching rows found in AppSheet.")
 
