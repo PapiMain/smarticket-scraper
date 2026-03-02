@@ -61,8 +61,8 @@ def get_appsheet_data(table_name):
             return rows
         else:
             # If still 0 rows, try the most direct call possible
-            print(f"ℹ️ No rows found with 'None', trying direct table call...")
-            return client.find_items(table_name)
+            print(f"⚠️ No rows found in {table_name}. Checking for server-side filter...")
+            return client.find_items(table_name, selector="true")
             
     except Exception as e:
         print(f"❌ py-appsheet error: {e}")
@@ -707,9 +707,8 @@ def update_appsheet_batch(shows, site_tab):
     if updates:
         num_updates = len(updates)
         try:
-            # The library uses 'update_items' for the "Edit" action
             # It handles the URL, Headers, and JSON structure for you
-            result = client.update_items(table="כרטיסים", items=updates)
+            client.edit_items(table="כרטיסים", items=updates)
             
             print(f"🚀 AppSheet Batch Update Status: Success")
             print(f"✅ Successfully updated {num_updates} rows in the 'כרטיסים' table.")
