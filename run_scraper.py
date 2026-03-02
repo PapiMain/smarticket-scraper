@@ -56,11 +56,6 @@ def clean_url(url_data):
     # If it's a string, it might be a JSON-string or a HYPERLINK formula
     str_url = str(url_data)
     
-    # Try to find a URL starting with http inside the string
-    match = re.search(r'https?://[^\s",\)]+', str_url)
-    if match:
-        return match.group(0).rstrip('"').rstrip(')')
-    
     return str_url.strip()
 
 # Helper function to fetch data from AppSheet using py-appsheet
@@ -119,8 +114,6 @@ def get_optimized_targets():
     # 3. Build the hall-specific search list
     hall_targets = {}
     print(f"📊 Processing {len(events)} events for hall targeting...")
-    skipped_no_url = 0
-    skipped_no_short_name = 0
 
     for e in events:
         hall_name = e.get("אולם")
@@ -129,26 +122,14 @@ def get_optimized_targets():
         
         url = hall_url_map.get(hall_name)
 
-        if not url:
-            skipped_no_url += 1
-            continue
-            
-        if not short_name:
-            skipped_no_short_name += 1
-            print(f"❓ Could not find short name for: '{full_prod_name}'") # Debug names
-            continue
-
-        if "smarticket.co.il" in url:
+        if url and short_name and "smarticket.co.il" in url:
             if "papi.smarticket" not in url and "friends.smarticket" not in url:
                 str_url = url if url.endswith("/") else f"{url}/"
                 if str_url not in hall_targets:
                     hall_targets[str_url] = set()
                 hall_targets[str_url].add(short_name)
 
-    print(f"✅ Targets generated!")
     print(f"   - Halls to visit: {len(hall_targets)}")
-    print(f"   - Events skipped (No URL match): {skipped_no_url}")
-    print(f"   - Events skipped (No Production name match): {skipped_no_short_name}")
 
     return all_short_names, hall_targets
 
