@@ -42,6 +42,11 @@ HEBREW_MONTHS = {
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
+def clean_url(url_data):
+    """Extracts the string URL if AppSheet returns a JSON object."""
+    if isinstance(url_data, dict):
+        return url_data.get("Url", "")
+    return str(url_data)
 
 # Helper function to fetch data from AppSheet using py-appsheet
 def get_appsheet_data(table_name):
@@ -88,7 +93,12 @@ def get_optimized_targets():
     all_short_names = [p.get("שם מקוצר") for p in productions if p.get("שם מקוצר")]
 
     # 2. Create Hall URL lookup
-    hall_url_map = {h.get("שם אולם"): h.get("אתר") for h in halls if h.get("אתר")}
+    hall_url_map = {}    # Map Hall Name -> Clean String URL
+
+    for h in halls:
+        raw_url = h.get("URL")
+        if raw_url:
+            hall_url_map[h.get("שם אולם")] = clean_url(raw_url)
 
     # 3. Build the hall-specific search list
     hall_targets = {}
@@ -108,26 +118,6 @@ def get_optimized_targets():
                 hall_targets[str_url].add(short_name)
 
     return all_short_names, hall_targets
-
-# This function is now focused solely on fetching the short names from the 'הפקות' table using the generic AppSheet client.    
-# def get_short_names():
-#     """Uses the generic AppSheet fetcher to get show names."""
-#     print("⏳ Fetching show names from AppSheet 'הפקות' table...")
-#     rows = get_appsheet_data("הפקות")
-#     # rows = get_appsheet_data("%D7%94%D7%A4%D7%A7%D7%95%D7%AA")  # URL-encoded 'הפקות'
-    
-#     if not rows:
-#         print("⚠️ No data returned from AppSheet 'הפקות'.")
-#         return []
-    
-#     # Standardize loop to ensure we are looking at dictionaries
-#     short_names = []
-#     for row in rows:
-#         if isinstance(row, dict) and row.get("שם מקוצר"):
-#             short_names.append(row["שם מקוצר"])
-    
-#     print(f"🔎 Found {len(short_names)} names to search.")
-#     return short_names
 
 # Set up Selenium WebDriver
 def get_driver():
@@ -681,7 +671,7 @@ def count_empty_seats(driver):
         return 0
 
 # Step 3: Update AppSheet with the new availability data using the matched IDs
-def update_appsheet_batch(shows, site_tab):
+def update_appsheet_batch(shows):
     """Matches scraped shows to AppSheet rows using ID and updates them."""
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
@@ -781,91 +771,6 @@ def update_appsheet_batch(shows, site_tab):
     else:
         print("❌ No matching rows found in AppSheet.")
 
-# Main scraper function for a given site configuration
-# def scrape_site(site_config):
-#     base_url = site_config["base_url"]
-#     sheet_tab = site_config["sheet_tab"]
-#     print(f"🌐 Starting scraper for site: {sheet_tab} ({base_url})")
-
-#     driver = get_driver()
-    
-#     # 1. This list must be outside the loops to collect EVERYTHING
-#     all_shows_to_update = []
-
-#     try:
-#         # Load show names from Google Sheets
-#         short_names = get_short_names()
-#         print(f"🔎 Loaded {len(short_names)} short names")
-        
-#         for name in short_names:
-#             print(f"➡️ Searching for: {name}")
-
-#             # Encode the show name for the URL
-#             search_url = f"{base_url}search?q={quote(name)}"
-
-#             try:
-#                 driver.get(search_url)
-
-#                 # Check for CAPTCHA
-#                 is_captcha = is_captcha_page(driver, name)
-#                 if is_captcha:
-#                     solved = handle_captcha(driver, name, True)
-#                     if not solved:
-#                         print(f"⚠️ Skipping '{name}' because CAPTCHA could not be solved.")
-#                         continue 
-#                 else:
-#                     print(f"ℹ️ No CAPTCHA detected for '{name}'")
-
-#                 print(f"✅ Finished search for: {name}")
-#                 print("🌍 Current URL:", driver.current_url)
-                
-#                 # 2. Get URLs with a safety check so it doesn't crash if 0 shows are found
-#                 urls = get_show_urls(driver)
-                
-#                 # 3. Process each URL found for this specific search name
-#                 for url in urls:
-#                     show = extract_show_details(driver, url)
-#                     if not show.get("name"): # Skip if extraction failed
-#                         continue
-
-#                     try:
-#                         select_area(driver)
-#                         available = count_empty_seats(driver)
-#                         show["available_seats"] = available
-                        
-#                         # Add the individual show results to our master list
-#                         all_shows_to_update.append(show)
-#                         print(f"🎫 Available seats for {show['name']} on {show['date']}: {available}")
-                        
-#                     except Exception as seat_e:
-#                         print(f"❌ Error counting seats for {show.get('name','?')}: {seat_e}")
-#                         show["available_seats"] = None
-
-#             except Exception as inner_e:
-#                 print(f"❌ Error during search/process for '{name}': {inner_e}")
-#                 save_debug(driver, name, "error_loop")
-
-#         # 4. CRITICAL: The update happens AFTER all searches are finished
-#         if all_shows_to_update:
-#             print(f"🚀 Found {len(all_shows_to_update)} total shows. Starting Batch Update to Google Sheets...")
-#             update_appsheet_batch(all_shows_to_update, sheet_tab)
-#         else:
-#             print("❌ No show data collected. Nothing to update.")
-
-#     finally:
-#         print("🏁 Scraper finished. Closing browser.")
-#         driver.quit()
-
-# Run daily scrapers
-# for site in [ "papi"]:
-#     scrape_site(SITES[site])
-
-def clean_url(url_data):
-    """Extracts the string URL if AppSheet returns a JSON object."""
-    if isinstance(url_data, dict):
-        return url_data.get("Url", "")
-    return str(url_data)
-
 def run_search_logic(driver, base_url, search_term, site_tag):
     """
     Handles the actual search process on a specific website.
@@ -924,15 +829,15 @@ def scrape_everything():
     # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
     main_sites = [
         {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
-        # {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
+        {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
     ]
 
-    for site in main_sites:
-        print(f"🌐 Scraping Aggregator: {site['tab']}")
-        print(f"🌐 Scraping website: {site['url']}")
-        for name in short_names:
-            results = run_search_logic(driver, site['url'], name, site['tab'])
-            all_results.extend(results)
+    # for site in main_sites:
+    #     print(f"🌐 Scraping Aggregator: {site['tab']}")
+    #     print(f"🌐 Scraping website: {site['url']}")
+    #     for name in short_names:
+    #         results = run_search_logic(driver, site['url'], name, site['tab'])
+    #         all_results.extend(results)
 
     # --- PART 2: Individual Halls (Search only relevant shows) ---
     for url, specific_shows in hall_targets.items():
