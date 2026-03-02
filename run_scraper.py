@@ -45,23 +45,24 @@ CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver 
 
 
 def get_appsheet_data(table_name):
-    """Uses the py-appsheet library to fetch data safely."""
+    """Uses the py-appsheet library to fetch data with the correct arguments."""
     client = AppSheetClient(
         app_id=os.environ.get("APPSHEET_APP_ID"),
         api_key=os.environ.get("APPSHEET_APP_KEY"),
     )
     
     try:
-        # Use None as the 'item' to fetch all rows without filtering
+        # Pass None as the 'item' to fetch all rows without a specific search term
         print(f"⏳ Fetching all rows from table: {table_name}")
-        rows = client.find_items(table_name)
+        rows = client.find_items(table_name, None)
         
         if rows:
             print(f"✅ Successfully retrieved {len(rows)} rows from {table_name}")
             return rows
         else:
-            print(f"⚠️ No rows found in {table_name}")
-            return []
+            # If still 0 rows, try the most direct call possible
+            print(f"ℹ️ No rows found with 'None', trying direct table call...")
+            return client.find_items(table_name)
             
     except Exception as e:
         print(f"❌ py-appsheet error: {e}")
