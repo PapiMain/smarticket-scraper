@@ -43,10 +43,25 @@ HEBREW_MONTHS = {
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
 def clean_url(url_data):
-    """Extracts the string URL if AppSheet returns a JSON object."""
+    """
+    Strips AppSheet junk and Hyperlink formulas to get a raw URL.
+    """
+    if not url_data:
+        return ""
+    
+    # If it's a dictionary/JSON object from AppSheet
     if isinstance(url_data, dict):
         return url_data.get("Url", "")
-    return str(url_data)
+    
+    # If it's a string, it might be a JSON-string or a HYPERLINK formula
+    str_url = str(url_data)
+    
+    # Try to find a URL starting with http inside the string
+    match = re.search(r'https?://[^\s",\)]+', str_url)
+    if match:
+        return match.group(0).rstrip('"').rstrip(')')
+    
+    return str_url.strip()
 
 # Helper function to fetch data from AppSheet using py-appsheet
 def get_appsheet_data(table_name):
@@ -96,13 +111,11 @@ def get_optimized_targets():
     hall_url_map = {}    # Map Hall Name -> Clean String URL
 
     for h in halls:
-        raw_url = h.get("URL")
+        raw_url = h.get("אתר")
         hall_name = h.get("שם אולם")
         if raw_url and hall_name:
             hall_url_map[str(hall_name).strip()] = clean_url(raw_url)
 
-    print(f"✅ Hall URL mapping created for {len(hall_url_map)} halls.")
-    print(hall_url_map)  # Debug print of hall URL mapping
     # 3. Build the hall-specific search list
     hall_targets = {}
     print(f"📊 Processing {len(events)} events for hall targeting...")
