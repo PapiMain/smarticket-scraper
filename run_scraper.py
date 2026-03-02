@@ -42,6 +42,7 @@ HEBREW_MONTHS = {
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
+
 # Helper function to fetch data from AppSheet using py-appsheet
 def get_appsheet_data(table_name):
     """Uses the py-appsheet library to fetch data with the correct arguments."""
@@ -66,26 +67,61 @@ def get_appsheet_data(table_name):
     except Exception as e:
         print(f"❌ py-appsheet error: {e}")
         return []
- 
+
+def get_optimized_targets():
+    """
+    Returns:
+    - global_productions: List of short names to search on Papi/Friends.
+    - hall_targets: Dict { "hall_url": ["Short Name 1", ... ] } for specific halls.
+    """
+    productions = get_appsheet_data("הפקות")
+    events = get_appsheet_data("אירועים")
+    halls = get_appsheet_data("אולמות")
+
+    # 1. Create a mapping of Full Production Name -> Short Name
+    # (Since events table likely uses the full name)
+    prod_name_to_short = {p.get("שם הפקה מלא"): p.get("שם מקוצר") for p in productions if p.get("שם הפקה מלא")}
+    all_short_names = [p.get("שם מקוצר") for p in productions if p.get("שם מקוצר")]
+
+    # 2. Create Hall URL lookup
+    hall_url_map = {h.get("שם אולם"): h.get("אתר") for h in halls if h.get("אתר")}
+
+    # 3. Build the hall-specific search list
+    hall_targets = {}
+    for e in events:
+        hall_name = e.get("אולם")
+        full_prod_name = e.get("הפקה")
+        short_name = prod_name_to_short.get(full_prod_name)
+        
+        url = hall_url_map.get(hall_name)
+        if url and short_name and "smarticket.co.il" in url:
+            # Check if this is NOT one of the main aggregators
+            if "papi.smarticket" not in url and "friends.smarticket" not in url:
+                if url not in hall_targets:
+                    hall_targets[url] = set()
+                hall_targets[url].add(short_name)
+
+    return all_short_names, hall_targets
+
 # This function is now focused solely on fetching the short names from the 'הפקות' table using the generic AppSheet client.    
-def get_short_names():
-    """Uses the generic AppSheet fetcher to get show names."""
-    print("⏳ Fetching show names from AppSheet 'הפקות' table...")
-    rows = get_appsheet_data("הפקות")
-    # rows = get_appsheet_data("%D7%94%D7%A4%D7%A7%D7%95%D7%AA")  # URL-encoded 'הפקות'
+# def get_short_names():
+#     """Uses the generic AppSheet fetcher to get show names."""
+#     print("⏳ Fetching show names from AppSheet 'הפקות' table...")
+#     rows = get_appsheet_data("הפקות")
+#     # rows = get_appsheet_data("%D7%94%D7%A4%D7%A7%D7%95%D7%AA")  # URL-encoded 'הפקות'
     
-    if not rows:
-        print("⚠️ No data returned from AppSheet 'הפקות'.")
-        return []
+#     if not rows:
+#         print("⚠️ No data returned from AppSheet 'הפקות'.")
+#         return []
     
-    # Standardize loop to ensure we are looking at dictionaries
-    short_names = []
-    for row in rows:
-        if isinstance(row, dict) and row.get("שם מקוצר"):
-            short_names.append(row["שם מקוצר"])
+#     # Standardize loop to ensure we are looking at dictionaries
+#     short_names = []
+#     for row in rows:
+#         if isinstance(row, dict) and row.get("שם מקוצר"):
+#             short_names.append(row["שם מקוצר"])
     
-    print(f"🔎 Found {len(short_names)} names to search.")
-    return short_names
+#     print(f"🔎 Found {len(short_names)} names to search.")
+#     return short_names
 
 # Set up Selenium WebDriver
 def get_driver():
@@ -643,7 +679,6 @@ def update_appsheet_batch(shows, site_tab):
     """Matches scraped shows to AppSheet rows using ID and updates them."""
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
-    client = AppSheetClient(app_id=app_id, api_key=app_key)
 
     # 1. Fetch current data to find the IDs
     print("⏳ Fetching current AppSheet data to match IDs...")
@@ -651,17 +686,31 @@ def update_appsheet_batch(shows, site_tab):
     
     israel_tz = pytz.timezone("Asia/Jerusalem")
     now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M')
-    org_value = "סמארטיקט" if site_tab == "Papi" else "פרינדס"
+
+    # site_tab = show.get("site_tag")
+    # if site_tab == "Papi":
+    #     org_value = "סמארטיקט"
+    # elif site_tab == "Friends":
+    #     org_value = "פרינדס"
+    # else:
+    #     org_value = "אולם"
 
     updates = []
-
     for show in shows:
+        # scraped_date = show["date"] # Assuming format 'DD/MM/YYYY'
         try:
             scraped_date_obj = datetime.strptime(show["date"], "%d/%m/%Y").date()
         except:
             continue
-        # scraped_date = show["date"] # Assuming format 'DD/MM/YYYY'
+
         scraped_name = show["name"].strip()
+        tag = show.get("site_tag")
+        if tag == "Papi":
+            org_value = "סמארטיקט"
+        elif tag == "Friends":
+            org_value = "פרינדס"
+        else:
+            org_value = "אולם"
 
         # 2. Find the ID in AppSheet that matches this show
         match = None
@@ -681,11 +730,12 @@ def update_appsheet_batch(shows, site_tab):
 
             # Comparison (Name + Date + Org)
             row_name = row.get("הפקה", "").strip()
+            row_org = row.get("ארגון", "").strip()
 
             # Match by Name, Date, and Organization
             if (scraped_name in row_name or row_name in scraped_name) and \
-               app_date_obj == scraped_date_obj and \
-               row.get("ארגון") == org_value:
+            app_date_obj == scraped_date_obj and \
+            row_org == org_value:
                 match = row
                 break
         
@@ -726,80 +776,166 @@ def update_appsheet_batch(shows, site_tab):
         print("❌ No matching rows found in AppSheet.")
 
 # Main scraper function for a given site configuration
-def scrape_site(site_config):
-    base_url = site_config["base_url"]
-    sheet_tab = site_config["sheet_tab"]
-    print(f"🌐 Starting scraper for site: {sheet_tab} ({base_url})")
+# def scrape_site(site_config):
+#     base_url = site_config["base_url"]
+#     sheet_tab = site_config["sheet_tab"]
+#     print(f"🌐 Starting scraper for site: {sheet_tab} ({base_url})")
 
-    driver = get_driver()
+#     driver = get_driver()
     
-    # 1. This list must be outside the loops to collect EVERYTHING
-    all_shows_to_update = []
+#     # 1. This list must be outside the loops to collect EVERYTHING
+#     all_shows_to_update = []
 
-    try:
-        # Load show names from Google Sheets
-        short_names = get_short_names()
-        print(f"🔎 Loaded {len(short_names)} short names")
+#     try:
+#         # Load show names from Google Sheets
+#         short_names = get_short_names()
+#         print(f"🔎 Loaded {len(short_names)} short names")
         
-        for name in short_names:
-            print(f"➡️ Searching for: {name}")
+#         for name in short_names:
+#             print(f"➡️ Searching for: {name}")
 
-            # Encode the show name for the URL
-            search_url = f"{base_url}search?q={quote(name)}"
+#             # Encode the show name for the URL
+#             search_url = f"{base_url}search?q={quote(name)}"
 
-            try:
-                driver.get(search_url)
+#             try:
+#                 driver.get(search_url)
 
-                # Check for CAPTCHA
-                is_captcha = is_captcha_page(driver, name)
-                if is_captcha:
-                    solved = handle_captcha(driver, name, True)
-                    if not solved:
-                        print(f"⚠️ Skipping '{name}' because CAPTCHA could not be solved.")
-                        continue 
-                else:
-                    print(f"ℹ️ No CAPTCHA detected for '{name}'")
+#                 # Check for CAPTCHA
+#                 is_captcha = is_captcha_page(driver, name)
+#                 if is_captcha:
+#                     solved = handle_captcha(driver, name, True)
+#                     if not solved:
+#                         print(f"⚠️ Skipping '{name}' because CAPTCHA could not be solved.")
+#                         continue 
+#                 else:
+#                     print(f"ℹ️ No CAPTCHA detected for '{name}'")
 
-                print(f"✅ Finished search for: {name}")
-                print("🌍 Current URL:", driver.current_url)
+#                 print(f"✅ Finished search for: {name}")
+#                 print("🌍 Current URL:", driver.current_url)
                 
-                # 2. Get URLs with a safety check so it doesn't crash if 0 shows are found
-                urls = get_show_urls(driver)
+#                 # 2. Get URLs with a safety check so it doesn't crash if 0 shows are found
+#                 urls = get_show_urls(driver)
                 
-                # 3. Process each URL found for this specific search name
-                for url in urls:
-                    show = extract_show_details(driver, url)
-                    if not show.get("name"): # Skip if extraction failed
-                        continue
+#                 # 3. Process each URL found for this specific search name
+#                 for url in urls:
+#                     show = extract_show_details(driver, url)
+#                     if not show.get("name"): # Skip if extraction failed
+#                         continue
 
-                    try:
-                        select_area(driver)
-                        available = count_empty_seats(driver)
-                        show["available_seats"] = available
+#                     try:
+#                         select_area(driver)
+#                         available = count_empty_seats(driver)
+#                         show["available_seats"] = available
                         
-                        # Add the individual show results to our master list
-                        all_shows_to_update.append(show)
-                        print(f"🎫 Available seats for {show['name']} on {show['date']}: {available}")
+#                         # Add the individual show results to our master list
+#                         all_shows_to_update.append(show)
+#                         print(f"🎫 Available seats for {show['name']} on {show['date']}: {available}")
                         
-                    except Exception as seat_e:
-                        print(f"❌ Error counting seats for {show.get('name','?')}: {seat_e}")
-                        show["available_seats"] = None
+#                     except Exception as seat_e:
+#                         print(f"❌ Error counting seats for {show.get('name','?')}: {seat_e}")
+#                         show["available_seats"] = None
 
-            except Exception as inner_e:
-                print(f"❌ Error during search/process for '{name}': {inner_e}")
-                save_debug(driver, name, "error_loop")
+#             except Exception as inner_e:
+#                 print(f"❌ Error during search/process for '{name}': {inner_e}")
+#                 save_debug(driver, name, "error_loop")
 
-        # 4. CRITICAL: The update happens AFTER all searches are finished
-        if all_shows_to_update:
-            print(f"🚀 Found {len(all_shows_to_update)} total shows. Starting Batch Update to Google Sheets...")
-            update_appsheet_batch(all_shows_to_update, sheet_tab)
-        else:
-            print("❌ No show data collected. Nothing to update.")
+#         # 4. CRITICAL: The update happens AFTER all searches are finished
+#         if all_shows_to_update:
+#             print(f"🚀 Found {len(all_shows_to_update)} total shows. Starting Batch Update to Google Sheets...")
+#             update_appsheet_batch(all_shows_to_update, sheet_tab)
+#         else:
+#             print("❌ No show data collected. Nothing to update.")
 
-    finally:
-        print("🏁 Scraper finished. Closing browser.")
-        driver.quit()
+#     finally:
+#         print("🏁 Scraper finished. Closing browser.")
+#         driver.quit()
 
 # Run daily scrapers
-for site in [ "papi"]:
-    scrape_site(SITES[site])
+# for site in [ "papi"]:
+#     scrape_site(SITES[site])
+
+def run_search_logic(driver, base_url, search_term, site_tag):
+    """
+    Handles the actual search process on a specific website.
+    Returns a list of 'show' dictionaries.
+    """
+    found_shows = []
+    
+    # 1. Construct and visit the search URL
+    search_url = f"{base_url}search?q={quote(search_term)}"
+    print(f"🔍 Navigating to: {search_url}")
+    
+    try:
+        driver.get(search_url)
+
+        # 2. CAPTCHA Check
+        if is_captcha_page(driver, search_term):
+            solved = handle_captcha(driver, search_term, True)
+            if not solved:
+                print(f"⚠️ Skipping '{search_term}' due to unsolved CAPTCHA.")
+                return []
+
+        # 3. Get all show URLs from the search results
+        urls = get_show_urls(driver)
+        
+        # 4. Process each individual show found
+        for url in urls:
+            show_data = extract_show_details(driver, url)
+            
+            if show_data.get("name"):
+                try:
+                    # Enter the seat map
+                    select_area(driver)
+                    # Count the seats
+                    available = count_empty_seats(driver)
+                    
+                    show_data["available_seats"] = available
+                    show_data["site_tag"] = site_tag # This tells the updater if it's Papi, Friends, or Hall
+                    
+                    found_shows.append(show_data)
+                    print(f"✅ Scraped: {show_data['name']} on {show_data['date']} | Seats: {available}")
+                
+                except Exception as e:
+                    print(f"❌ Error while checking seats at {url}: {e}")
+
+    except Exception as e:
+        print(f"❌ Critical error searching for '{search_term}' at {base_url}: {e}")
+        save_debug(driver, search_term, "search_crash")
+
+    return found_shows
+
+def scrape_everything():
+    short_names, hall_targets = get_optimized_targets()
+    driver = get_driver()
+    all_results = []
+
+    # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
+    main_sites = [
+        {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
+        # {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
+    ]
+
+    for site in main_sites:
+        print(f"🌐 Scraping Aggregator: {site['tab']}")
+        print(f"🌐 Scraping website: {site['url']}")
+        for name in short_names:
+            results = run_search_logic(driver, site['url'], name, site['tab'])
+            all_results.extend(results)
+
+    # --- PART 2: Individual Halls (Search only relevant shows) ---
+    for url, specific_shows in hall_targets.items():
+        print(f"🏛️ Scraping Hall: {url}")
+        for name in specific_shows:
+            # We pass "Hall" as the tab so the update logic knows it's a specific hall
+            results = run_search_logic(driver, url, name, "Hall")
+            all_results.extend(results)
+
+    # --- PART 3: Batch Update ---
+    if all_results:
+        update_appsheet_batch(all_results)
+    
+    print("🏁 Scraper finished. Closing browser.")
+    driver.quit()
+
+if __name__ == "__main__":
+    scrape_everything()
