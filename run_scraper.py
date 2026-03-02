@@ -56,6 +56,11 @@ def clean_url(url_data):
     # If it's a string, it might be a JSON-string or a HYPERLINK formula
     str_url = str(url_data)
     
+    # Try to find a URL starting with http inside the string
+    match = re.search(r'https?://[^\s",\)]+', str_url)
+    if match:
+        return match.group(0).rstrip('"').rstrip(')')
+    
     return str_url.strip()
 
 # Helper function to fetch data from AppSheet using py-appsheet
