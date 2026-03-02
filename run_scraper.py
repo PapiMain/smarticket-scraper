@@ -45,9 +45,6 @@ CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver 
 def get_appsheet_data(table_name):
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
-    
-    # Use the plain Hebrew table name. 
-    # The 'requests' library handles UTF-8 encoding automatically.
     url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
     
     headers = {
@@ -55,24 +52,26 @@ def get_appsheet_data(table_name):
         "Content-Type": "application/json"
     }
     
-    # This is the most basic 'Find All' body supported by AppSheet
+    # Based on the documentation link:
+    # We use SELECT(ColumnName, True) to get all keys.
+    # 'שם הפקה מלא' is your Key column.
     body = {
         "Action": "Find",
         "Properties": {
             "Locale": "he-IL",
-            "Timezone": "Israel Standard Time"
+            "Timezone": "Israel Standard Time",
+            "Selector": "SELECT(שם הפקה מלא, True)" 
         },
         "Rows": []
     }
     
     try:
-        response = requests.post(url, json=body, headers=headers, timeout=30)
+        response = requests.post(url, json=body, headers=headers, timeout=60)
         data = response.json()
         
-        print(f"DEBUG: Find Response for {table_name}: {data}")
+        print(f"DEBUG: Response for {table_name}: {data}")
 
-        # AppSheet returns the actual rows in 'RowValues'
-        if isinstance(data, dict) and data.get("RowValues") is not None:
+        if isinstance(data, dict) and data.get("RowValues"):
             return data["RowValues"]
         
         return []
