@@ -52,9 +52,9 @@ def get_appsheet_data(table_name):
     )
     
     try:
+        # Use None as the 'item' to fetch all rows without filtering
         print(f"⏳ Fetching all rows from table: {table_name}")
-        # find_items() with no arguments returns all rows
-        rows = client.find_items(table_name)
+        rows = client.find_items(table_name, None)
         
         if rows:
             print(f"✅ Successfully retrieved {len(rows)} rows from {table_name}")
