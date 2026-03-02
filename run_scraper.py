@@ -70,8 +70,8 @@ def get_appsheet_data(table_name):
 def get_short_names():
     """Uses the generic AppSheet fetcher to get show names."""
     print("⏳ Fetching show names from AppSheet 'הפקות' table...")
-    # rows = get_appsheet_data("הפקות")
-    rows = get_appsheet_data("%D7%94%D7%A4%D7%A7%D7%95%D7%AA")  # URL-encoded 'הפקות'
+    rows = get_appsheet_data("הפקות")
+    # rows = get_appsheet_data("%D7%94%D7%A4%D7%A7%D7%95%D7%AA")  # URL-encoded 'הפקות'
     
     if not rows:
         print("⚠️ No data returned from AppSheet 'הפקות'.")
