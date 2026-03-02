@@ -1,5 +1,5 @@
 selenium
-gspread
-oauth2client
 chromedriver-autoinstaller
 pytz
+requests
+py-appsheet
