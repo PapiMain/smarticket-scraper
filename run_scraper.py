@@ -41,26 +41,19 @@ HEBREW_MONTHS = {
 }
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
-
+   
 def clean_url(url_data):
-    """
-    Strips AppSheet junk and Hyperlink formulas to get a raw URL.
-    """
-    if not url_data:
-        return ""
+    if not url_data: return ""
+    if isinstance(url_data, dict): return url_data.get("Url", "")
     
-    # If it's a dictionary/JSON object from AppSheet
-    if isinstance(url_data, dict):
-        return url_data.get("Url", "")
-    
-    # If it's a string, it might be a JSON-string or a HYPERLINK formula
+    # Remove AppSheet's HYPERLINK wrapper if it exists as a string
     str_url = str(url_data)
-    
-    # Try to find a URL starting with http inside the string
-    match = re.search(r'https?://[^\s",\)]+', str_url)
-    if match:
-        return match.group(0).rstrip('"').rstrip(')')
-    
+    if "http" in str_url:
+        # Extract everything starting from http until the first " or , or )
+        match = re.search(r'https?://[^\s",\)]+', str_url)
+        if match:
+            return match.group(0)
+            # return match.group(0).rstrip('"').rstrip(')')
     return str_url.strip()
 
 # Helper function to fetch data from AppSheet using py-appsheet
@@ -748,7 +741,7 @@ def update_appsheet_batch(shows):
         
         if not match:
             print(f"❌ No AppSheet match for: {scraped_name} on {show['date']} ({org_value})")
-            
+
         if match:
             # Calculate 'נמכרו' (Sold) logic
             try:
