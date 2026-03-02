@@ -14,6 +14,7 @@ import requests
 from datetime import datetime
 import pytz
 import re
+from py_appsheet import AppSheetClient
 
 SITES = {
     "friends": {
@@ -42,41 +43,28 @@ HEBREW_MONTHS = {
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
+
 def get_appsheet_data(table_name):
-    app_id = os.environ.get("APPSHEET_APP_ID")
-    app_key = os.environ.get("APPSHEET_APP_KEY")
-    url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
-    
-    headers = {
-        "ApplicationAccessKey": app_key,
-        "Content-Type": "application/json"
-    }
-    
-    # Based on the documentation link:
-    # We use SELECT(ColumnName, True) to get all keys.
-    # 'שם הפקה מלא' is your Key column.
-    body = {
-        "Action": "Find",
-        "Properties": {
-            "Locale": "he-IL",
-            "Timezone": "Israel Standard Time",
-            "Selector": "SELECT(שם הפקה מלא, True)" 
-        },
-        "Rows": []
-    }
+    """Uses the py-appsheet library to fetch data safely."""
+    client = AppSheetClient(
+        app_id=os.environ.get("APPSHEET_APP_ID"),
+        api_key=os.environ.get("APPSHEET_APP_KEY"),
+    )
     
     try:
-        response = requests.post(url, json=body, headers=headers, timeout=60)
-        data = response.json()
+        print(f"⏳ Fetching all rows from table: {table_name}")
+        # find_items() with no arguments returns all rows
+        rows = client.find_items(table_name)
         
-        print(f"DEBUG: Response for {table_name}: {data}")
-
-        if isinstance(data, dict) and data.get("RowValues"):
-            return data["RowValues"]
-        
-        return []
+        if rows:
+            print(f"✅ Successfully retrieved {len(rows)} rows from {table_name}")
+            return rows
+        else:
+            print(f"⚠️ No rows found in {table_name}")
+            return []
+            
     except Exception as e:
-        print(f"❌ API Request failed: {e}")
+        print(f"❌ py-appsheet error: {e}")
         return []
         
 def get_short_names():
