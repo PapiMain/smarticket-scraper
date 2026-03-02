@@ -700,15 +700,7 @@ def update_appsheet_batch(shows):
     current_rows = get_appsheet_data("כרטיסים")
     
     israel_tz = pytz.timezone("Asia/Jerusalem")
-    now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M')
-
-    # site_tab = show.get("site_tag")
-    # if site_tab == "Papi":
-    #     org_value = "סמארטיקט"
-    # elif site_tab == "Friends":
-    #     org_value = "פרינדס"
-    # else:
-    #     org_value = "אולם"
+    now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M:%S') 
 
     updates = []
     for show in shows:
@@ -754,6 +746,9 @@ def update_appsheet_batch(shows):
                 match = row
                 break
         
+        if not match:
+            print(f"❌ No AppSheet match for: {scraped_name} on {show['date']} ({org_value})")
+            
         if match:
             # Calculate 'נמכרו' (Sold) logic
             try:
@@ -848,15 +843,15 @@ def scrape_everything():
     # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
     main_sites = [
         {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
-        {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
+        # {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
     ]
 
-    # for site in main_sites:
-    #     print(f"🌐 Scraping Aggregator: {site['tab']}")
-    #     print(f"🌐 Scraping website: {site['url']}")
-    #     for name in short_names:
-    #         results = run_search_logic(driver, site['url'], name, site['tab'])
-    #         all_results.extend(results)
+    for site in main_sites:
+        print(f"🌐 Scraping Aggregator: {site['tab']}")
+        print(f"🌐 Scraping website: {site['url']}")
+        for name in short_names:
+            results = run_search_logic(driver, site['url'], name, site['tab'])
+            all_results.extend(results)
 
     # --- PART 2: Individual Halls (Search only relevant shows) ---
     for url, specific_shows in hall_targets.items():
