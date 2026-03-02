@@ -101,6 +101,8 @@ def get_optimized_targets():
         if raw_url and hall_name:
             hall_url_map[str(hall_name).strip()] = clean_url(raw_url)
 
+    print(f"✅ Hall URL mapping created for {len(hall_url_map)} halls.")
+    print(hall_url_map)  # Debug print of hall URL mapping
     # 3. Build the hall-specific search list
     hall_targets = {}
     print(f"📊 Processing {len(events)} events for hall targeting...")
