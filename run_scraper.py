@@ -46,7 +46,8 @@ def get_appsheet_data(table_name):
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
     
-    # USE THE PLAIN HEBREW NAME HERE - Requests handles the encoding
+    # Use the plain Hebrew table name. 
+    # The 'requests' library handles UTF-8 encoding automatically.
     url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/{table_name}/Action"
     
     headers = {
@@ -54,28 +55,26 @@ def get_appsheet_data(table_name):
         "Content-Type": "application/json"
     }
     
-    # We change the Action to "Select"
-    # This bypasses the need for "Rows" or "Keys" entirely
+    # This is the most basic 'Find All' body supported by AppSheet
     body = {
-        "Action": "Select", 
+        "Action": "Find",
         "Properties": {
             "Locale": "he-IL",
-            "Selector": f"Select({table_name}[_ComputedKey], True)" 
-        }
+            "Timezone": "Israel Standard Time"
+        },
+        "Rows": []
     }
     
     try:
         response = requests.post(url, json=body, headers=headers, timeout=30)
         data = response.json()
         
-        print(f"DEBUG: Select Response for {table_name}: {data}")
+        print(f"DEBUG: Find Response for {table_name}: {data}")
 
-        # 'Select' action returns a list of results directly
-        if isinstance(data, list):
-            # If we just got a list of Keys, we need to convert them to 
-            # the format the rest of your scraper expects.
-            return [{"שם מקוצר": val} for val in data] if table_name == "הפקות" else data
-            
+        # AppSheet returns the actual rows in 'RowValues'
+        if isinstance(data, dict) and data.get("RowValues") is not None:
+            return data["RowValues"]
+        
         return []
     except Exception as e:
         print(f"❌ API Request failed: {e}")
