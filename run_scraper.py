@@ -54,7 +54,7 @@ def get_appsheet_data(table_name):
     try:
         # Pass None as the 'item' to fetch all rows without a specific search term
         print(f"⏳ Fetching all rows from table: {table_name}")
-        rows = client.find_items(table_name, None)
+        rows = client.find_items(table_name, "")
         
         if rows:
             print(f"✅ Successfully retrieved {len(rows)} rows from {table_name}")
