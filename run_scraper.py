@@ -707,8 +707,8 @@ def update_appsheet_batch(shows, site_tab):
     if updates:
         num_updates = len(updates)
         try:
-            # It handles the URL, Headers, and JSON structure for you
-            client.edit_items(table="כרטיסים", items=updates)
+            # client.call(table, action, rows) is the batch method for this library
+            client.call("כרטיסים", "Edit", updates)
             
             print(f"🚀 AppSheet Batch Update Status: Success")
             print(f"✅ Successfully updated {num_updates} rows in the 'כרטיסים' table.")
