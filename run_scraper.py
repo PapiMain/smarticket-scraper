@@ -1,4 +1,4 @@
-from selenium import webdriver
+# from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -14,6 +14,7 @@ from datetime import datetime
 import pytz
 import re
 from py_appsheet import AppSheetClient
+from seleniumbase import Driver
 
 SITES = {
     "friends": {
@@ -160,28 +161,44 @@ def get_optimized_targets():
 
     return all_short_names, hall_targets
 
-# Set up Selenium WebDriver
+# 2. Update get_driver to use SeleniumBase UC Mode
 def get_driver():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.binary_location = "/usr/bin/chromium-browser"  # 👈 important
-    options.add_argument("--disable-blink-features=AutomationControlled")
-
-    service = Service(executable_path="/usr/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=options)
-
-    # Now you can safely inject the stealth JS
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": """
-        Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
-        """
-    })
-
+    """
+    Uses SeleniumBase UC Mode to bypass Cloudflare.
+    This replaces the standard Selenium options.
+    """
+    driver = Driver(
+        browser="chrome",
+        uc=True,          # Enables Undetected-Chromedriver
+        headless2=True,   # Special headless mode that is harder to detect
+        no_sandbox=True,
+        disable_gpu=True,
+        incognito=True
+    )
     return driver
+
+# Set up Selenium WebDriver
+# def get_driver():
+#     options = Options()
+#     options.add_argument("--headless=new")
+#     options.add_argument("--no-sandbox")
+#     options.add_argument("--disable-dev-shm-usage")
+#     options.add_argument("--disable-gpu")
+#     options.add_argument("--window-size=1920,1080")
+#     options.binary_location = "/usr/bin/chromium-browser"  # 👈 important
+#     options.add_argument("--disable-blink-features=AutomationControlled")
+
+#     service = Service(executable_path="/usr/bin/chromedriver")
+#     driver = webdriver.Chrome(service=service, options=options)
+
+#     # Now you can safely inject the stealth JS
+#     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+#         "source": """
+#         Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
+#         """
+#     })
+
+#     return driver
 
 # Save screenshot for debugging
 def save_debug(driver, show_name, suffix):
@@ -855,14 +872,25 @@ def run_search_logic(driver, base_url, search_term, site_tag):
     print(f"🔍 Navigating to: {search_url}")
     
     try:
-        driver.get(search_url)
+        # driver.get(search_url)
+
+        # UC Mode navigation: This handles the 'Just a moment' challenge automatically
+        driver.uc_open_with_reconnect(search_url, reconnect_time=5)
+        # If a Turnstile checkbox appears, this attempt to click it
+        driver.uc_gui_click_captcha() 
+        
+        # 4. Standard scraping logic continues...
+        # Note: SeleniumBase allows using standard Selenium selectors
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "a.show"))
+        )
 
         # 2. CAPTCHA Check
-        if is_captcha_page(driver, search_term):
-            solved = handle_captcha(driver, search_term, True)
-            if not solved:
-                print(f"⚠️ Skipping '{search_term}' due to unsolved CAPTCHA.")
-                return []
+        # if is_captcha_page(driver, search_term):
+        #     solved = handle_captcha(driver, search_term, True)
+        #     if not solved:
+        #         print(f"⚠️ Skipping '{search_term}' due to unsolved CAPTCHA.")
+        #         return []
 
         # 3. Get all show URLs from the search results
         urls = get_show_urls(driver)
@@ -888,8 +916,11 @@ def run_search_logic(driver, base_url, search_term, site_tag):
                     print(f"❌ Error while checking seats at {url}: {e}")
 
     except Exception as e:
-        print(f"❌ Critical error searching for '{search_term}' at {base_url}: {e}")
-        save_debug(driver, search_term, "search_crash")
+        print(f"❌ Blocked or Error: {e}")
+        save_debug(driver, search_term, "blocked_by_cloudflare")
+    # except Exception as e:
+    #     print(f"❌ Critical error searching for '{search_term}' at {base_url}: {e}")
+    #     save_debug(driver, search_term, "search_crash")
 
     return found_shows
 
@@ -901,8 +932,8 @@ def scrape_everything():
 
     # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
     main_sites = [
-        {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
-        # {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
+        # {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
+        {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
     ]     
 
     for site in main_sites:
@@ -913,12 +944,12 @@ def scrape_everything():
             all_results.extend(results)
 
     # --- PART 2: Individual Halls (Search only relevant shows) ---
-    for url, specific_shows in hall_targets.items():
-        print(f"🏛️ Scraping Hall: {url}")
-        for name in specific_shows:
-            # We pass "Hall" as the tab so the update logic knows it's a specific hall
-            results = run_search_logic(driver, url, name, "Hall")
-            all_results.extend(results)
+    # for url, specific_shows in hall_targets.items():
+    #     print(f"🏛️ Scraping Hall: {url}")
+    #     for name in specific_shows:
+    #         # We pass "Hall" as the tab so the update logic knows it's a specific hall
+    #         results = run_search_logic(driver, url, name, "Hall")
+    #         all_results.extend(results)
 
     # --- PART 3: Batch Update ---
     if all_results:
