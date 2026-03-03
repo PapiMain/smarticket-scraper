@@ -1,4 +1,5 @@
 # from selenium import webdriver
+import random
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -874,23 +875,30 @@ def run_search_logic(driver, base_url, search_term, site_tag):
     try:
         # driver.get(search_url)
 
+        time.sleep(random.uniform(2, 5)) # Add a tiny human-like delay
         # UC Mode navigation: This handles the 'Just a moment' challenge automatically
         driver.uc_open_with_reconnect(search_url, reconnect_time=5)
-        # If a Turnstile checkbox appears, this attempt to click it
-        driver.uc_gui_click_captcha() 
+
+        # if is_captcha_page(driver, search_term): not used for now
+        # 2. Check if we are still stuck on the "Just a moment" page
+        if "Just a moment" in driver.title:
+            print(f"⏳ Still on Cloudflare page for {search_term}. Attempting CapSolver...")
+            # Use your existing CapSolver logic
+            solved = handle_captcha(driver, search_term, True)
+            if not solved:
+                print(f"⚠️ Skipping '{search_term}' due to unsolved CAPTCHA.")
+                return []
+            # Give it a moment to redirect after injection
+            time.sleep(5)
+
+        WebDriverWait(driver, 15).until(
+            lambda d: "Just a moment" not in d.title
+        )
         
-        # 4. Standard scraping logic continues...
         # Note: SeleniumBase allows using standard Selenium selectors
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "a.show"))
         )
-
-        # 2. CAPTCHA Check
-        # if is_captcha_page(driver, search_term):
-        #     solved = handle_captcha(driver, search_term, True)
-        #     if not solved:
-        #         print(f"⚠️ Skipping '{search_term}' due to unsolved CAPTCHA.")
-        #         return []
 
         # 3. Get all show URLs from the search results
         urls = get_show_urls(driver)
