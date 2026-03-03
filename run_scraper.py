@@ -41,7 +41,8 @@ HEBREW_MONTHS = {
 }
 
 CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
-   
+
+# Helper function to clean URLs from AppSheet, handling both direct strings and HYPERLINK formulas
 def clean_url(url_data):
     if not url_data: return ""
     if isinstance(url_data, dict): return url_data.get("Url", "")
@@ -81,6 +82,7 @@ def get_appsheet_data(table_name):
         print(f"❌ py-appsheet error: {e}")
         return []
 
+# Main function to determine which shows to scrape based on AppSheet data and return the optimized list of targets
 def get_optimized_targets():
     """
     Returns:
@@ -614,6 +616,7 @@ def get_show_urls(driver):
         print("ℹ️ No shows found for this search.")
         return []
 
+# Check if we're on a landing page and navigate to the event page if needed
 def ensure_event_page(driver):
     """
     Checks if the current page is a landing page. 
@@ -839,6 +842,7 @@ def update_appsheet_batch(shows):
     else:
         print("❌ No matching rows found in AppSheet.")
 
+# Main function to run the search logic for a given site and search term, returning found shows with availability
 def run_search_logic(driver, base_url, search_term, site_tag):
     """
     Handles the actual search process on a specific website.
@@ -889,6 +893,7 @@ def run_search_logic(driver, base_url, search_term, site_tag):
 
     return found_shows
 
+# Main orchestrator function to scrape all targets and update AppSheet
 def scrape_everything():
     short_names, hall_targets = get_optimized_targets()
     driver = get_driver()
@@ -922,5 +927,6 @@ def scrape_everything():
     print("🏁 Scraper finished. Closing browser.")
     driver.quit()
 
+# Main entry point
 if __name__ == "__main__":
     scrape_everything()
