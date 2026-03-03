@@ -1,7 +1,4 @@
-# from selenium import webdriver
 import random
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -16,16 +13,6 @@ import pytz
 import re
 from py_appsheet import AppSheetClient
 from seleniumbase import Driver
-
-SITES = {
-    "friends": {
-        "base_url": "https://friends.smarticket.co.il/",
-        "sheet_tab": "Friends"
-    },
-    "papi": {
-        "base_url": "https://papi.smarticket.co.il/",
-        "sheet_tab": "Papi"
-    },}
 
 HEBREW_MONTHS = {
     "ינואר": 1,
@@ -113,7 +100,19 @@ def get_optimized_targets():
     # 1. Create a mapping of Full Production Name -> Short Name
     # (Since events table likely uses the full name)
     prod_name_to_short = {p.get("שם הפקה מלא"): p.get("שם מקוצר") for p in productions if p.get("שם הפקה מלא")}
-    all_short_names = [p.get("שם מקוצר") for p in productions if p.get("שם מקוצר")]
+
+    active_production_dates = {} # { "סבא אליעזר": ["14/03/2026", "28/03/2026"] }
+
+    for e in events:
+        full_name = e.get("הפקה")
+        date = e.get("תאריך") # וודא שזה הפורמט שמופיע באתר (למשל DD/MM/YYYY)
+        short = prod_name_to_short.get(full_name)
+        if short and date:
+            if short not in active_production_dates:
+                active_production_dates[short] = []
+            active_production_dates[short].append(date)
+
+    all_short_names = list(active_production_dates.keys())
 
     # 2. Create Hall URL lookup
     hall_url_map = {}    # Map Hall Name -> Clean String URL
@@ -160,7 +159,7 @@ def get_optimized_targets():
     hall_targets = {k: list(v) for k, v in hall_targets.items()}
     print(f"   - Halls to visit: {len(hall_targets)}")
 
-    return all_short_names, hall_targets
+    return all_short_names, hall_targets, active_production_dates
 
 # 2. Update get_driver to use SeleniumBase UC Mode
 def get_driver():
@@ -235,31 +234,6 @@ def save_debug(driver, show_name, suffix):
     except Exception as e:
         print(f"⚠️ Error while saving assets: {e}")
 
-# Check if current page is a CAPTCHA page
-def is_captcha_page(driver, show_name="unknown"):
-    html = driver.page_source.lower()
-    title = driver.title.lower()
-
-    # Detect real captcha indicators
-    if ("iframe" in html and "recaptcha" in html) or \
-       "g-recaptcha" in html or \
-       "cf-challenge" in html or \
-       "verifying" in html:
-        print(f"⚠️ CAPTCHA elements detected for '{show_name}'")
-        # print("ℹ️ Page title:", title)
-        # print("ℹ️ First 500 chars of HTML:", html[:500])
-        # save_debug(driver, show_name, "captcha")
-        return True
-
-    # Quick check: Cloudflare interstitial
-    if "just a moment" in title:
-        print(f"⏳ Cloudflare interstitial detected (not necessarily captcha) for '{show_name}'")
-        save_debug(driver, show_name, "cf_interstitial")
-        return False
-
-    print(f"✅ No CAPTCHA detected for '{show_name}'")
-    return False
-
 # Parse Hebrew date string
 def parse_hebrew_date(date_str):
     """
@@ -301,7 +275,10 @@ def get_show_urls(driver):
         print(f"✅ Found {len(urls)} show URLs")
         return urls
     except TimeoutException:
-        print("ℹ️ No shows found for this search.")
+        if "Just a moment" in driver.title:
+            print("❌ Still blocked by Cloudflare (Just a moment).")
+        else:
+            print("ℹ️ No shows found on page (Search result empty).")
         return []
 
 # Check if we're on a landing page and navigate to the event page if needed
@@ -531,7 +508,7 @@ def update_appsheet_batch(shows):
         print("❌ No matching rows found in AppSheet.")
 
 # Main function to run the search logic for a given site and search term, returning found shows with availability
-def run_search_logic(driver, base_url, search_term, site_tag):
+def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
     """
     Handles the actual search process on a specific website.
     Returns a list of 'show' dictionaries.
@@ -545,7 +522,7 @@ def run_search_logic(driver, base_url, search_term, site_tag):
     try:
         # driver.get(search_url)
 
-        time.sleep(random.uniform(2, 5)) # Add a tiny human-like delay
+        time.sleep(random.uniform(2, 4)) # Add a tiny human-like delay
         # UC Mode navigation: This handles the 'Just a moment' challenge automatically
         driver.uc_open_with_reconnect(search_url, reconnect_time=10)
 
@@ -553,53 +530,49 @@ def run_search_logic(driver, base_url, search_term, site_tag):
         if "Just a moment" in driver.title:
             print("🛡️ Cloudflare detected, attempting internal bypass...")
             driver.uc_gui_click_captcha() # SeleniumBase handles the "no mouse" issue better now
-            time.sleep(5)
-        
-        # Now just check if the content is there
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, "a.show"))
-            )
-            print("✅ Success! Page loaded.")
-            # Proceed with your scraping...
-        except:
-            print("❌ Still blocked. Cloudflare won this round.")
+            time.sleep(4)
 
         # 3. Get all show URLs from the search results
         urls = get_show_urls(driver)
+        if not urls:
+            return []
+        
+        valid_dates = active_dates_map.get(search_term, [])
         
         # 4. Process each individual show found
         for url in urls:
             show_data = extract_show_details(driver, url)
             
-            if show_data.get("name"):
-                try:
-                    # Enter the seat map
-                    select_area(driver)
-                    # Count the seats
-                    available = count_empty_seats(driver)
-                    
-                    show_data["available_seats"] = available
-                    show_data["site_tag"] = site_tag # This tells the updater if it's Papi, Friends, or Hall
-                    
-                    found_shows.append(show_data)
-                    print(f"✅ Scraped: {show_data['name']} on {show_data['date']} | Seats: {available}")
+            if show_data.get("name"): continue
+
+            if valid_dates and show_data.get("date") not in valid_dates:
+                print(f"⏩ Skipping {show_data['name']} on {show_data['date']} (Not in AppSheet targets)")
+                continue
+
+            try:
+                # Enter the seat map
+                select_area(driver)
+                # Count the seats
+                available = count_empty_seats(driver)
                 
-                except Exception as e:
-                    print(f"❌ Error while checking seats at {url}: {e}")
+                show_data["available_seats"] = available
+                show_data["site_tag"] = site_tag # This tells the updater if it's Papi, Friends, or Hall
+                
+                found_shows.append(show_data)
+                print(f"✅ Scraped: {show_data['name']} on {show_data['date']} | Seats: {available}")
+            
+            except Exception as e:
+                print(f"❌ Error while checking seats at {url}: {e}")
 
     except Exception as e:
-        print(f"❌ Blocked or Error: {e}")
-        save_debug(driver, search_term, "blocked_by_cloudflare")
-    # except Exception as e:
-    #     print(f"❌ Critical error searching for '{search_term}' at {base_url}: {e}")
-    #     save_debug(driver, search_term, "search_crash")
+        print(f"❌ Critical error searching for '{search_term}' at {base_url}: {e}")
+        save_debug(driver, search_term, "search_crash")
 
     return found_shows
 
 # Main orchestrator function to scrape all targets and update AppSheet
 def scrape_everything():
-    short_names, hall_targets = get_optimized_targets()
+    short_names, hall_targets, active_dates_map = get_optimized_targets()
     driver = get_driver()
     all_results = []
 
@@ -613,7 +586,7 @@ def scrape_everything():
         print(f"🌐 Scraping Aggregator: {site['tab']}")
         print(f"🌐 Scraping website: {site['url']}")
         for name in short_names:
-            results = run_search_logic(driver, site['url'], name, site['tab'])
+            results = run_search_logic(driver, site['url'], name, site['tab'], active_dates_map)
             all_results.extend(results)
 
     # --- PART 2: Individual Halls (Search only relevant shows) ---
@@ -621,7 +594,7 @@ def scrape_everything():
     #     print(f"🏛️ Scraping Hall: {url}")
     #     for name in specific_shows:
     #         # We pass "Hall" as the tab so the update logic knows it's a specific hall
-    #         results = run_search_logic(driver, url, name, "Hall")
+    #         results = run_search_logic(driver, url, name, "Hall", active_dates_map)
     #         all_results.extend(results)
 
     # --- PART 3: Batch Update ---
