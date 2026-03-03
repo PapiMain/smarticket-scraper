@@ -164,42 +164,16 @@ def get_optimized_targets():
 
 # 2. Update get_driver to use SeleniumBase UC Mode
 def get_driver():
-    """
-    Uses SeleniumBase UC Mode to bypass Cloudflare.
-    This replaces the standard Selenium options.
-    """
-    driver = Driver(
+    return Driver(
         browser="chrome",
-        uc=True,          # Enables Undetected-Chromedriver
-        headless2=True,   # Special headless mode that is harder to detect
+        uc=True,          # Undetected mode
+        headless2=True,   # Special "hidden" mode that looks visible to Cloudflare
         no_sandbox=True,
         disable_gpu=True,
-        incognito=True
+        incognito=True,
+        # This prevents Cloudflare from seeing the 'Automation' flag
+        agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36"
     )
-    return driver
-
-# Set up Selenium WebDriver
-# def get_driver():
-#     options = Options()
-#     options.add_argument("--headless=new")
-#     options.add_argument("--no-sandbox")
-#     options.add_argument("--disable-dev-shm-usage")
-#     options.add_argument("--disable-gpu")
-#     options.add_argument("--window-size=1920,1080")
-#     options.binary_location = "/usr/bin/chromium-browser"  # 👈 important
-#     options.add_argument("--disable-blink-features=AutomationControlled")
-
-#     service = Service(executable_path="/usr/bin/chromedriver")
-#     driver = webdriver.Chrome(service=service, options=options)
-
-#     # Now you can safely inject the stealth JS
-#     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-#         "source": """
-#         Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
-#         """
-#     })
-
-#     return driver
 
 # Save screenshot for debugging
 def save_debug(driver, show_name, suffix):
@@ -445,7 +419,7 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
     print(f"🔧 Creating CapSolver task: {chosen}")
 
     # Retry loop for robustness
-    max_retries = 3
+    max_retries = 1
     for attempt_retry in range(1, max_retries + 1):
         try:
             print(f"🚀 Attempt {attempt_retry}/{max_retries} to create task...")
@@ -882,28 +856,23 @@ def run_search_logic(driver, base_url, search_term, site_tag):
 
         time.sleep(random.uniform(2, 5)) # Add a tiny human-like delay
         # UC Mode navigation: This handles the 'Just a moment' challenge automatically
-        driver.uc_open_with_reconnect(search_url, reconnect_time=5)
+        driver.uc_open_with_reconnect(search_url, reconnect_time=10)
 
-        # if is_captcha_page(driver, search_term): not used for now
-        # 2. Check if we are still stuck on the "Just a moment" page
+        # If we are still blocked, try one "human" click
         if "Just a moment" in driver.title:
-            print(f"⏳ Still on Cloudflare page for {search_term}. Attempting CapSolver...")
-            # Use your existing CapSolver logic
-            solved = handle_captcha(driver, search_term, True)
-            if not solved:
-                print(f"⚠️ Skipping '{search_term}' due to unsolved CAPTCHA.")
-                return []
-            # Give it a moment to redirect after injection
+            print("🛡️ Cloudflare detected, attempting internal bypass...")
+            driver.uc_gui_click_captcha() # SeleniumBase handles the "no mouse" issue better now
             time.sleep(5)
-
-        WebDriverWait(driver, 15).until(
-            lambda d: "Just a moment" not in d.title
-        )
         
-        # Note: SeleniumBase allows using standard Selenium selectors
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "a.show"))
-        )
+        # Now just check if the content is there
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, "a.show"))
+            )
+            print("✅ Success! Page loaded.")
+            # Proceed with your scraping...
+        except:
+            print("❌ Still blocked. Cloudflare won this round.")
 
         # 3. Get all show URLs from the search results
         urls = get_show_urls(driver)
