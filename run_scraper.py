@@ -95,6 +95,17 @@ def get_optimized_targets():
         print("⚠️ No future events found in 'אירועי עתיד'.")
         return [], {}
     
+   # Key = Hall Name in AppSheet, Value = The correct URL to use
+    special_halls_lookup = {
+        "היכל התרבות מודיעין מכבים רעות": "https://www.shows.org.il/",
+        "היכל התרבות יבנה": "https://www.htyavne.co.il/",
+        "היכל התרבות-בית יד לבנים רעננה": "https://tickets.raanana.muni.il/",
+        "תאטרון גבעתיים": "https://t-g.smarticket.co.il/",
+        "היכל התרבות אור עקיבא": "https://htorakiva.smarticket.co.il/",
+        "מרכז אמנויות הבמה שוהם": "https://shoham.smarticket.co.il/",
+        "תאטרון חולון": "https://hth.smarticket.co.il/"
+    }
+
     # 1. Create a mapping of Full Production Name -> Short Name
     # (Since events table likely uses the full name)
     prod_name_to_short = {p.get("שם הפקה מלא"): p.get("שם מקוצר") for p in productions if p.get("שם הפקה מלא")}
@@ -114,19 +125,35 @@ def get_optimized_targets():
     print(f"📊 Processing {len(events)} events for hall targeting...")
 
     for e in events:
-        hall_name = e.get("אולם")
+        hall_name = str(e.get("אולם", "")).strip()
         full_prod_name = e.get("הפקה")
         short_name = prod_name_to_short.get(full_prod_name)
         
-        url = hall_url_map.get(hall_name)
+        if not short_name:
+            continue
 
-        if url and short_name and "smarticket.co.il" in url:
-            if "papi.smarticket" not in url and "friends.smarticket" not in url:
-                str_url = url if url.endswith("/") else f"{url}/"
-                if str_url not in hall_targets:
-                    hall_targets[str_url] = set()
-                hall_targets[str_url].add(short_name)
+        # First, check if it's one of our hard-coded special halls
+        if hall_name in special_halls_lookup:
+            url = special_halls_lookup[hall_name]
+        else:
+            # Otherwise, use the URL from AppSheet
+            url = hall_url_map.get(hall_name)
 
+        if url:
+            is_special = hall_name in special_halls_lookup
+            is_smarticket = "smarticket.co.il" in url
+            
+            if is_special or is_smarticket:
+                # Exclude global hubs
+                if "papi.smarticket" not in url and "friends.smarticket" not in url:
+                    str_url = url if url.endswith("/") else f"{url}/"
+                    
+                    if str_url not in hall_targets:
+                        hall_targets[str_url] = set()
+                    hall_targets[str_url].add(short_name)
+
+    # Convert sets back to lists
+    hall_targets = {k: list(v) for k, v in hall_targets.items()}
     print(f"   - Halls to visit: {len(hall_targets)}")
 
     return all_short_names, hall_targets
@@ -871,7 +898,7 @@ def scrape_everything():
     main_sites = [
         {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
         # {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
-    ]
+    ]     
 
     for site in main_sites:
         print(f"🌐 Scraping Aggregator: {site['tab']}")
