@@ -19,10 +19,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Browser Dependencies
+      - name: Install Browser and Xvfb Dependencies
         run: |
           sudo apt update
-          sudo apt install -y libnss3 libgbm1 libasound2t64
+          sudo apt install -y xvfb libnss3 libgbm1 libasound2t64 xauth
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -41,7 +41,6 @@ jobs:
           CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python run_scraper.py
-
       - name: Upload screenshots
         if: always() # Ensure this runs even if the scraper fails
         uses: actions/upload-artifact@v4
