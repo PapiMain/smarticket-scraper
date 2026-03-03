@@ -38,10 +38,12 @@ jobs:
           python run_scraper.py
 
       - name: Upload screenshots
+        if: always() # Ensure this runs even if the scraper fails
         uses: actions/upload-artifact@v4
         with:
           name: smarticket-screenshots
           path: screenshots/
+          retention-days: 7
 
   keepalive:
     runs-on: ubuntu-latest
