@@ -22,7 +22,7 @@ jobs:
       - name: Install Browser Dependencies
         run: |
           sudo apt update
-          sudo apt install -y libnss3 libgconf-2-4 libgbm1 libasound2
+          sudo apt install -y libnss3 libgbm1 libasound2t64
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
