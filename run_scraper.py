@@ -29,8 +29,6 @@ HEBREW_MONTHS = {
     "דצמבר": 12
 }
 
-CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
-
 # Helper function to clean URLs from AppSheet, handling both direct strings and HYPERLINK formulas
 def clean_url(url_data):
     if not url_data: return ""
