@@ -34,13 +34,13 @@ jobs:
           sudo apt update
           sudo apt install -y chromium-browser chromium-chromedriver
 
-      - name: Run scraper
+      - name: Run scraper with Xvfb
         env:
           APPSHEET_APP_ID: ${{ secrets.APPSHEET_APP_ID }}
           APPSHEET_APP_KEY: ${{ secrets.APPSHEET_APP_KEY }}
           CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
         run: |
-          python run_scraper.py
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python run_scraper.py
 
       - name: Upload screenshots
         if: always() # Ensure this runs even if the scraper fails
