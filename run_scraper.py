@@ -587,11 +587,42 @@ def get_show_urls(driver):
         print("ℹ️ No shows found for this search.")
         return []
 
+def ensure_event_page(driver):
+    """
+    Checks if the current page is a landing page. 
+    If so, clicks the first 'Order Now' button to reach the detailed event page.
+    """
+    if "?id=" not in driver.current_url:
+        try:
+            # Wait for the table listing dates to appear
+            WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, ".table-responsive table, a.btn-danger"))
+            )
+            
+            # Find the 'Order Now' button (הזמן עכשיו)
+            order_buttons = driver.find_elements(By.CSS_SELECTOR, "a.btn-danger[aria-label='הזמן עכשיו'], a.btn-danger")
+            
+            if order_buttons:
+                print(f"🔗 Landing page detected ({driver.current_url}). Navigating to event ID...")
+                driver.execute_script("arguments[0].click();", order_buttons[0])
+                
+                # Wait for the specific event container to load
+                WebDriverWait(driver, 10).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "div.show_details"))
+                )
+                return True
+        except Exception as e:
+            print(f"⚠️ Navigation to event page failed: {e}")
+    return False
+
 # Step 2: Extract show details from an individual show page
 def extract_show_details(driver, url):
     show = {"url": url}
     try:
         driver.get(url)
+
+        ensure_event_page(driver)
+
         WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.CSS_SELECTOR, "div.show_details"))
         )
@@ -704,6 +735,9 @@ def update_appsheet_batch(shows):
             continue
 
         scraped_name = show["name"].strip()
+
+        if "סימבה" in scraped_name and all(x not in scraped_name for x in ["סוואנה", "אפריקה"]): scraped_name = "סימבה מלך"
+
         tag = show.get("site_tag")
         if tag == "Papi":
             org_value = "סמארטיקט"
