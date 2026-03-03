@@ -329,7 +329,7 @@ def find_turnstile_sitekey(driver, verbose=True):
         try:
             src = driver.page_source
             # pattern: 0x followed by at least 10 chars (alphanumeric)
-            m = re.search(r"(0x[a-zA-Z0-9_\-]{8,60})", src)
+            m = re.search(r"(0x4[a-zA-Z0-9_\-]{20,50})", src)
             if m:
                 site_key = m.group(1)
                 if verbose: print(f"🧩 sitekey found in page_source (regex): {site_key}")
@@ -343,7 +343,7 @@ def find_turnstile_sitekey(driver, verbose=True):
             for s in scripts:
                 try:
                     txt = s.get_attribute("innerText") or ""
-                    m = re.search(r"(0x[a-zA-Z0-9_\-]{8,60})", txt)
+                    m = re.search(r"(0x4[a-zA-Z0-9_\-]{20,50})", src)
                     if m:
                         site_key = m.group(1)
                         if verbose: print(f"🧩 sitekey found inside <script>: {site_key}")
@@ -416,13 +416,22 @@ def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
             "websiteKey": site_key
         }
         chosen = "AntiTurnstileTaskProxyLess (Cloudflare Turnstile with sitekey)"
-    elif captcha_type == "cloudflare_challenge": # <--- NEW BLOCK
+    elif captcha_type == "cloudflare_challenge":
+        # If we truly have no sitekey, we use AntiTurnstileTask with specific metadata
+        # But for Smarticket, try to find that 0x... key first!
         task = {
-            "type": "AntiCloudflareTaskProxyLess", # <--- Use the general challenge bypass task
-            "websiteURL": site_url
-            # NO websiteKey required for this task type
+            "type": "AntiTurnstileTaskProxyLess", 
+            "websiteURL": site_url,
+            "metadata": {
+                "action": "managed", # Standard for 'Just a moment' pages
+            }
         }
-        chosen = "AntiCloudflareTaskProxyLess (general Cloudflare Challenge)"
+        if site_key:
+            task["websiteKey"] = site_key
+        else:
+            # If still no key, some sites allow '0x4AAAAAAADn9q9S3S93v_1' as a placeholder
+            # but it's better to find the real one.
+            raise Exception("❌ CapSolver requires a websiteKey for Turnstile.")
     elif captcha_type == "anti_turnstile":
         # task = {
         #     "type": "AntiTurnstileTaskProxyLess",
@@ -541,18 +550,14 @@ def handle_captcha(driver, name, is_captcha):
         # Determine the best solving strategy
         page_title = driver.title.lower()
 
-        if "just a moment..." in page_title:
-            # This is the full-page challenge, which often does not need a sitekey
-            captcha_type = "cloudflare_challenge"
-            site_key = None # Explicitly discard any potential false positive sitekey
-            print("✅ Full-page 'just a moment...' detected. Using general CapSolver Cloudflare Challenge task.")
-            
-        elif site_key:
-            # If a sitekey was reliably found (e.g., not the regex false positive)
+        # FIX: Use the site_key if we found one! 
+        if site_key:
             captcha_type = "turnstile"
-            print("✅ Turnstile sitekey found. Using Turnstile task with sitekey.")
+            print(f"✅ Sitekey found ({site_key}). Using Turnstile task.")
+        elif "just a moment" in page_title:
+            captcha_type = "cloudflare_challenge"
+            print("✅ Full-page challenge detected without sitekey.")
         else:
-            # Fallback to anti_turnstile if no reliable key was found
             captcha_type = "cloudflare_challenge"
             print("⚠️ No sitekey found, falling back to general Cloudflare Challenge task.")
 
