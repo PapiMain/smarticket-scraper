@@ -167,12 +167,10 @@ def get_driver():
     return Driver(
         browser="chrome",
         uc=True,
-        # IMPORTANT: Set headless to False or remove it. 
-        # Xvfb makes it "headed" but invisible to you.
-        headless=False, 
-        xvfb=True,       # Tells SeleniumBase to use the virtual display on Linux
+        headless=False,  # Set to False so PyAutoGUI/UC can work
         no_sandbox=True,
         disable_gpu=True,
+        incognito=True
     )
 
 # Save screenshot for debugging
