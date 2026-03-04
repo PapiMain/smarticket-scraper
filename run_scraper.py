@@ -431,13 +431,13 @@ def update_appsheet_batch(shows):
 
     updates = []
     for show in shows:
-        # scraped_date = show["date"] # Assuming format 'DD/MM/YYYY'
         try:
             scraped_date_obj = datetime.strptime(show["date"], "%d/%m/%Y").date()
         except:
             continue
 
         scraped_name = show["name"].strip()
+        clean_scraped_name = scraped_name.replace('"', '').replace("'", "").replace(".", "").strip()
 
         if "סימבה" in scraped_name and all(x not in scraped_name for x in ["סוואנה", "אפריקה"]): scraped_name = "סימבה מלך"
 
@@ -453,7 +453,6 @@ def update_appsheet_batch(shows):
         match = None
         for row in current_rows:
             app_date_raw = row.get("תאריך")
-            if not app_date_raw: continue
 
             # Date Format Guesser: AppSheet might send YYYY-MM-DD or MM/DD/YYYY
             app_date_obj = None
@@ -463,17 +462,18 @@ def update_appsheet_batch(shows):
                     break
                 except: continue
 
-            if not app_date_obj: continue
+            if app_date_obj != scraped_date_obj: continue
 
             # Comparison (Name + Date + Org)
-            row_name = row.get("הפקה", "").strip()
             row_org = row.get("ארגון", "").strip()
 
             row_full_name = row.get("הפקה", "").strip()
             short_name = name_mapper.get(row_full_name, row_full_name) # אם אין שם קצר, נשתמש במלא
+            clean_short_name = short_name.replace('"', '').replace("'", "").replace(".", "").strip()
 
-            name_match = short_name in scraped_name or scraped_name in short_name
-
+            
+            name_match = (clean_short_name.lower() in clean_scraped_name.lower()) or \
+                        (clean_scraped_name.lower() in clean_short_name.lower())
             # maybe add hall matching logic here in the future if needed, but it can be tricky due to naming variations
             # row_hall = row.get("אולם", "").strip()
             # נבדוק אם יש מילה משותפת משמעותית בשם האולם (למשל "נס ציונה")
@@ -549,6 +549,11 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
             print("🛡️ Cloudflare detected, attempting internal bypass...")
             driver.uc_gui_click_captcha() # SeleniumBase handles the "no mouse" issue better now
             time.sleep(4)
+        
+        print("📜 Scrolling to load all cards...")
+        for _ in range(4): # 4 גלילות קטנות
+            driver.execute_script("window.scrollBy(0, 800);")
+            time.sleep(1)
 
         try:
             WebDriverWait(driver, 7).until(
@@ -569,9 +574,6 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
                 normalized_valid_dates.append(d)
 
         print(f"🎯 Target dates for '{search_term}': {normalized_valid_dates}")
-
-        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-        time.sleep(2) # זמן לטעינה
         
         show_cards = driver.find_elements(By.CSS_SELECTOR, "a.show")
         total = len(show_cards)
@@ -582,6 +584,9 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
         
         for i, card in enumerate(show_cards):
             try:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
+                time.sleep(0.2)
+
                 # חילוץ נתונים ישירות מהכרטיסייה (ה-HTML ששלחת)
                 raw_date = driver.execute_script("return arguments[0].querySelector('.date_container').innerText;", card).strip()
                 full_name = driver.execute_script("return arguments[0].querySelector('h2').innerText;", card).strip()
