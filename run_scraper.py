@@ -111,6 +111,7 @@ def get_optimized_targets():
             active_production_dates[short].append(date)
 
     all_short_names = list(active_production_dates.keys())
+    print(f"🎯 Found {len(all_short_names)} active productions with future events.")
 
     # 2. Create Hall URL lookup
     hall_url_map = {}    # Map Hall Name -> Clean String URL
@@ -239,14 +240,18 @@ def parse_hebrew_date(date_str):
     'ביום שבת, 15 בנובמבר 2025' → '15/11/2025'
     'יום רביעי, 17 ספטמבר 2025' → '17/09/2025'
     """
+    if not date_str or not isinstance(date_str, str):
+        return ""
+    
     try:
-        # Remove leading 'ביום' or 'יום' and any commas
-        clean = re.sub(r"ביום\s+|יום\s+|,", "", date_str).strip()
+        # ניקוי רווחים כפולים ותווים מוזרים
+        clean = " ".join(date_str.split())
+        clean = re.sub(r"ביום\s+|יום\s+|,", "", clean).strip()
 
         # Extract numeric day, month (with optional prefix ב), and year
         match = re.search(r"(\d{1,2})\s+ב?([א-ת]+)\s+(\d{4})", clean)
         if not match:
-            raise ValueError(f"Cannot parse Hebrew date: {date_str}")
+            return "" 
 
         day = int(match.group(1))
         month_name = match.group(2)
@@ -254,13 +259,13 @@ def parse_hebrew_date(date_str):
 
         month = HEBREW_MONTHS.get(month_name)
         if not month:
-            raise ValueError(f"Unknown Hebrew month: {month_name}")
+            return ""
 
         return datetime(year, month, day).strftime("%d/%m/%Y")
 
-    except Exception as e:
+    except:
         print(f"⚠️ Failed to parse date '{date_str}': {e}")
-        return date_str
+        return ""
 
 # Step 1: Get all show URLs from the search results
 def get_show_urls(driver):
@@ -528,8 +533,6 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
             print("🛡️ Cloudflare detected, attempting internal bypass...")
             driver.uc_gui_click_captcha() # SeleniumBase handles the "no mouse" issue better now
             time.sleep(4)
-        else:
-            print("❌ Still blocked by Cloudflare (Just a moment).")
 
         try:
             WebDriverWait(driver, 7).until(
@@ -540,11 +543,20 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
             return []
         
         valid_dates = active_dates_map.get(search_term, [])
-        print(f"🎯 Target dates for '{search_term}': {valid_dates}")
+        normalized_valid_dates = []
+        for d in valid_dates:
+            try:
+                # אם התאריך הגיע כ-MM/DD/YYYY, נהפוך אותו ל-DD/MM/YYYY
+                dt = datetime.strptime(d, "%m/%d/%Y")
+                normalized_valid_dates.append(dt.strftime("%d/%m/%Y"))
+            except:
+                normalized_valid_dates.append(d)
+
+        print(f"🎯 Target dates for '{search_term}': {normalized_valid_dates}")
         
         show_cards = driver.find_elements(By.CSS_SELECTOR, "a.show")
         print(f"🔍 Found {len(show_cards)} show cards for '{search_term}' before date filtering.")
-        
+
         # שמירת לינקים ונתונים שצריך לבדוק מושבים עבורם
         to_process = []
 
@@ -553,11 +565,14 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
                 # חילוץ נתונים ישירות מהכרטיסייה (ה-HTML ששלחת)
                 raw_date = card.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
                 parsed_date = parse_hebrew_date(raw_date) # שימוש בפונקציה הקיימת שלך
+                if not parsed_date:
+                    continue
                 
                 # אם התאריך לא ברשימה שלנו - מדלגים מיד בלי להיכנס ללינק!
-                if valid_dates and parsed_date not in valid_dates:
+                if normalized_valid_dates and parsed_date not in normalized_valid_dates:
+                    print(f"⏩ Skipping {parsed_date} (Not in targets)")
                     continue
-
+            
                 # אם עברנו את הסינון, נאסוף את שאר הנתונים מהכרטיסייה
                 show_info = {
                     "url": card.get_attribute("href"),
@@ -576,6 +591,7 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
         
         for show_data in to_process:
             try:
+                print(f"⭐ Processing match: {show_data['name']} on {show_data['date']}")
                 driver.get(show_data["url"])
                 ensure_event_page(driver) # הפונקציה שלך שמטפלת בדפי נחיתה
                 
