@@ -267,23 +267,6 @@ def parse_hebrew_date(date_str):
         print(f"⚠️ Failed to parse date '{date_str}': {e}")
         return ""
 
-# Step 1: Get all show URLs from the search results
-def get_show_urls(driver):
-    try:
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
-        )
-        show_elements = driver.find_elements(By.CSS_SELECTOR, "a.show")
-        urls = [el.get_attribute("href") for el in show_elements if el.get_attribute("href")]
-        print(f"✅ Found {len(urls)} show URLs")
-        return urls
-    except TimeoutException:
-        if "Just a moment" in driver.title:
-            print("❌ Still blocked by Cloudflare (Just a moment).")
-        else:
-            print("ℹ️ No shows found on page (Search result empty).")
-        return []
-
 # Check if we're on a landing page and navigate to the event page if needed
 def ensure_event_page(driver):
     """
@@ -312,52 +295,6 @@ def ensure_event_page(driver):
         except Exception as e:
             print(f"⚠️ Navigation to event page failed: {e}")
     return False
-
-# Step 2: Extract show details from an individual show page
-def extract_show_details(driver, url):
-    show = {"url": url}
-    try:
-        driver.get(url)
-
-        ensure_event_page(driver)
-
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div.show_details"))
-        )
-
-        container = driver.find_element(By.CSS_SELECTOR, "div.show_details")
-
-        # Title
-        show["name"] = container.find_element(By.CSS_SELECTOR, "h1").text.strip()
-
-        # Hall (remove "מפת הגעה")
-        hall_text = container.find_element(By.CSS_SELECTOR, ".theater").text.strip()
-        show["hall"] = hall_text.replace("(מפת הגעה)", "").strip()
-
-        # Date
-        raw_date = container.find_element(By.CSS_SELECTOR, ".event-date").text.strip()
-        show["date"] = parse_hebrew_date(raw_date)  # stays only date
-
-        # Time (clean string, keep only time)
-        raw_time = container.find_element(By.CSS_SELECTOR, ".event-time").text.strip()
-        show["time"] = raw_time.replace("בשעה", "").strip()
-
-        # Price range
-        try:
-            price_text = container.find_element(By.CSS_SELECTOR, ".price_range").text.strip()
-            show["price"] = price_text
-        except:
-            show["price"] = ""
-
-        print(
-            f"🎭 Extracted show: {show['name']} - {show['hall']} "
-            f"({show['date']} | {show['time']}) - {show['price']}"
-        )        
-
-    except Exception as e:
-        print(f"❌ Failed to extract show from {url}: {e}")
-
-    return show
 
 # Select area if area selection table appears (some shows require selecting an area before showing the seat map)
 def select_area(driver):
@@ -420,7 +357,7 @@ def update_appsheet_batch(shows):
     print("⏳ Fetching productions to map short names...")
     productions = get_appsheet_data("הפקות")
     # יצירת מילון: { "שם הפקה": "שם קצר" }
-    name_mapper = {row.get("הפקה", "").strip(): row.get("שם קצר", "").strip() for row in productions}
+    name_mapper = {str(row.get("הפקה", "")).strip(): str(row.get("שם קצר", "")).strip() for row in productions}
 
     # 1. Fetch current data to find the IDs
     print("⏳ Fetching current AppSheet data to match IDs...")
@@ -468,8 +405,11 @@ def update_appsheet_batch(shows):
             # Comparison (Name + Date + Org)
             row_org = row.get("ארגון", "").strip()
 
-            row_full_name = row.get("הפקה", "").strip()
-            short_name = name_mapper.get(row_full_name, row_full_name) # אם אין שם קצר, נשתמש במלא
+            row_full_name = str(row.get("הפקה", "")).strip()
+            short_name = name_mapper.get(row_full_name)
+            if not short_name:
+                short_name = row_full_name
+                
             clean_short_name = short_name.replace('"', '').replace("'", "").replace(".", "").strip()
 
             
