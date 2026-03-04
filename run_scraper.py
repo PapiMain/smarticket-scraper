@@ -263,7 +263,7 @@ def parse_hebrew_date(date_str):
 
         return datetime(year, month, day).strftime("%d/%m/%Y")
 
-    except:
+    except Exception as e:
         print(f"⚠️ Failed to parse date '{date_str}': {e}")
         return ""
 
@@ -417,6 +417,11 @@ def update_appsheet_batch(shows):
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
 
+    print("⏳ Fetching productions to map short names...")
+    productions = get_appsheet_data("הפקות")
+    # יצירת מילון: { "שם הפקה": "שם קצר" }
+    name_mapper = {row.get("הפקה", "").strip(): row.get("שם קצר", "").strip() for row in productions}
+
     # 1. Fetch current data to find the IDs
     print("⏳ Fetching current AppSheet data to match IDs...")
     current_rows = get_appsheet_data("כרטיסים")
@@ -464,8 +469,19 @@ def update_appsheet_batch(shows):
             row_name = row.get("הפקה", "").strip()
             row_org = row.get("ארגון", "").strip()
 
+            row_full_name = row.get("הפקה", "").strip()
+            short_name = name_mapper.get(row_full_name, row_full_name) # אם אין שם קצר, נשתמש במלא
+
+            name_match = short_name in scraped_name or scraped_name in short_name
+
+            # maybe add hall matching logic here in the future if needed, but it can be tricky due to naming variations
+            # row_hall = row.get("אולם", "").strip()
+            # נבדוק אם יש מילה משותפת משמעותית בשם האולם (למשל "נס ציונה")
+            # hall_keywords = [w for w in row_hall.split() if len(w) > 2 and w not in ["היכל", "התרבות", "אולם"]]
+            # hall_match = any(word in scraped_hall for word in hall_keywords)
+
             # Match by Name, Date, and Organization
-            if (scraped_name in row_name or row_name in scraped_name) and \
+            if (name_match) and \
             app_date_obj == scraped_date_obj and \
             row_org == org_value:
                 match = row
@@ -553,6 +569,9 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
                 normalized_valid_dates.append(d)
 
         print(f"🎯 Target dates for '{search_term}': {normalized_valid_dates}")
+
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(2) # זמן לטעינה
         
         show_cards = driver.find_elements(By.CSS_SELECTOR, "a.show")
         total = len(show_cards)
@@ -564,15 +583,19 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
         for i, card in enumerate(show_cards):
             try:
                 # חילוץ נתונים ישירות מהכרטיסייה (ה-HTML ששלחת)
-                raw_date = card.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
-                parsed_date = parse_hebrew_date(raw_date) # שימוש בפונקציה הקיימת שלך
-
-                name_el = card.find_element(By.CSS_SELECTOR, "h2")
-                full_name = driver.execute_script("return arguments[0].innerText;", name_el).strip()
+                raw_date = driver.execute_script("return arguments[0].querySelector('.date_container').innerText;", card).strip()
+                full_name = driver.execute_script("return arguments[0].querySelector('h2').innerText;", card).strip()
+                
+                parsed_date = parse_hebrew_date(raw_date)
 
                 print(f"   [{i+1}/{total}] Card Name: '{full_name}' | Date: '{parsed_date}'")
-                if not parsed_date:
-                    continue
+
+                if not parsed_date or not full_name:
+                    # אם עדיין ריק, ננסה גלילה קטנה לאלמנט הספציפי
+                    driver.execute_script("arguments[0].scrollIntoView();", card)
+                    raw_date = driver.execute_script("return arguments[0].querySelector('.date_container').innerText;", card).strip()
+                    full_name = driver.execute_script("return arguments[0].querySelector('h2').innerText;", card).strip()
+                    parsed_date = parse_hebrew_date(raw_date)
                 
                 # אם התאריך לא ברשימה שלנו - מדלגים מיד בלי להיכנס ללינק!
                 if normalized_valid_dates and parsed_date not in normalized_valid_dates:
@@ -582,12 +605,15 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
                      print(f"🎯 Date {parsed_date} is a target! Processing this show.")
                     
                 # אם עברנו את הסינון, נאסוף את שאר הנתונים מהכרטיסייה
+                hall = driver.execute_script("return arguments[0].querySelector('.theater_container').innerText;", card).strip().replace("(מפת הגעה)", "")
+                time_val = driver.execute_script("return arguments[0].querySelector('.time_container').innerText;", card).replace("בשעה", "").strip()
+
                 show_info = {
                     "url": card.get_attribute("href"),
-                    "name": card.find_element(By.CSS_SELECTOR, "h2").text.strip(),
-                    "hall": card.find_element(By.CSS_SELECTOR, ".theater_container").text.strip().replace("(מפת הגעה)", ""),
+                    "name": full_name,
+                    "hall": hall,
                     "date": parsed_date,
-                    "time": card.find_element(By.CSS_SELECTOR, ".time_container").text.replace("בשעה", "").strip(),
+                    "time": time_val,
                     "site_tag": site_tag
                 }
                 to_process.append(show_info)
