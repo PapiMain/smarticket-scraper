@@ -437,7 +437,8 @@ def update_appsheet_batch(shows):
             continue
 
         scraped_name = show["name"].strip()
-        clean_scraped_name = scraped_name.replace('"', '').replace("'", "").replace(".", "").strip()
+        # clean_scraped_name = scraped_name.replace('"', '').replace("'", "").replace(".", "").strip()
+        clean_scraped_name = " ".join(scraped_name.replace("–", "-").replace(".", "").split()).lower()
 
         if "סימבה" in scraped_name and all(x not in scraped_name for x in ["סוואנה", "אפריקה"]): scraped_name = "סימבה מלך"
 
@@ -488,7 +489,7 @@ def update_appsheet_batch(shows):
                 break
         
         if not match:
-            print(f"❌ No AppSheet match for: {scraped_name} on {show['date']} ({org_value})")
+            print(f"❌ No AppSheet match for: {scraped_name} vs {short_name} on {show['date']} ({org_value})")
 
         if match:
             # Calculate 'נמכרו' (Sold) logic
