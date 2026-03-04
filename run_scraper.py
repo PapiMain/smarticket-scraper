@@ -555,16 +555,22 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
         print(f"🎯 Target dates for '{search_term}': {normalized_valid_dates}")
         
         show_cards = driver.find_elements(By.CSS_SELECTOR, "a.show")
-        print(f"🔍 Found {len(show_cards)} show cards for '{search_term}' before date filtering.")
+        total = len(show_cards)
+        print(f"🔍 Found {total} show cards for '{search_term}' before date filtering.")
 
         # שמירת לינקים ונתונים שצריך לבדוק מושבים עבורם
         to_process = []
-
-        for card in show_cards:
+        
+        for i, card in enumerate(show_cards):
             try:
                 # חילוץ נתונים ישירות מהכרטיסייה (ה-HTML ששלחת)
                 raw_date = card.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
                 parsed_date = parse_hebrew_date(raw_date) # שימוש בפונקציה הקיימת שלך
+
+                name_el = card.find_element(By.CSS_SELECTOR, "h2")
+                full_name = driver.execute_script("return arguments[0].innerText;", name_el).strip()
+
+                print(f"   [{i+1}/{total}] Card Name: '{full_name}' | Date: '{parsed_date}'")
                 if not parsed_date:
                     continue
                 
@@ -572,7 +578,9 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
                 if normalized_valid_dates and parsed_date not in normalized_valid_dates:
                     print(f"⏩ Skipping {parsed_date} (Not in targets)")
                     continue
-            
+                else:
+                     print(f"🎯 Date {parsed_date} is a target! Processing this show.")
+                    
                 # אם עברנו את הסינון, נאסוף את שאר הנתונים מהכרטיסייה
                 show_info = {
                     "url": card.get_attribute("href"),
@@ -587,6 +595,7 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
 
             except Exception as e:
                 print(f"⚠️ Error processing a show card for {search_term}: {e}")
+                print(f"   [{i+1}/{total}] ⚠️ Error reading card: {str(e)[:50]}")
                 continue
         
         for show_data in to_process:
