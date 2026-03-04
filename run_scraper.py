@@ -518,7 +518,6 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
     print(f"🔍 Navigating to: {search_url}")
     
     try:
-        # driver.get(search_url)
 
         time.sleep(random.uniform(2, 4)) # Add a tiny human-like delay
         # UC Mode navigation: This handles the 'Just a moment' challenge automatically
@@ -529,38 +528,66 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
             print("🛡️ Cloudflare detected, attempting internal bypass...")
             driver.uc_gui_click_captcha() # SeleniumBase handles the "no mouse" issue better now
             time.sleep(4)
+        else:
+            print("❌ Still blocked by Cloudflare (Just a moment).")
 
-        # 3. Get all show URLs from the search results
-        urls = get_show_urls(driver)
-        if not urls:
+        try:
+            WebDriverWait(driver, 7).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
+            )
+        except TimeoutException:
+            print(f"ℹ️ No results for '{search_term}'")
             return []
         
         valid_dates = active_dates_map.get(search_term, [])
+        print(f"🎯 Target dates for '{search_term}': {valid_dates}")
         
-        # 4. Process each individual show found
-        for url in urls:
-            show_data = extract_show_details(driver, url)
-            
-            if show_data.get("name"): continue
+        show_cards = driver.find_elements(By.CSS_SELECTOR, "a.show")
+        print(f"🔍 Found {len(show_cards)} show cards for '{search_term}' before date filtering.")
+        
+        # שמירת לינקים ונתונים שצריך לבדוק מושבים עבורם
+        to_process = []
 
-            if valid_dates and show_data.get("date") not in valid_dates:
-                print(f"⏩ Skipping {show_data['name']} on {show_data['date']} (Not in AppSheet targets)")
-                continue
-
+        for card in show_cards:
             try:
-                # Enter the seat map
+                # חילוץ נתונים ישירות מהכרטיסייה (ה-HTML ששלחת)
+                raw_date = card.find_element(By.CSS_SELECTOR, ".date_container").text.strip()
+                parsed_date = parse_hebrew_date(raw_date) # שימוש בפונקציה הקיימת שלך
+                
+                # אם התאריך לא ברשימה שלנו - מדלגים מיד בלי להיכנס ללינק!
+                if valid_dates and parsed_date not in valid_dates:
+                    continue
+
+                # אם עברנו את הסינון, נאסוף את שאר הנתונים מהכרטיסייה
+                show_info = {
+                    "url": card.get_attribute("href"),
+                    "name": card.find_element(By.CSS_SELECTOR, "h2").text.strip(),
+                    "hall": card.find_element(By.CSS_SELECTOR, ".theater_container").text.strip().replace("(מפת הגעה)", ""),
+                    "date": parsed_date,
+                    "time": card.find_element(By.CSS_SELECTOR, ".time_container").text.replace("בשעה", "").strip(),
+                    "site_tag": site_tag
+                }
+                to_process.append(show_info)
+                print(f"⭐ Match found: {show_info['name']} - {show_info['hall']} on {parsed_date} - {show_info['time']}. Adding to queue.")
+
+            except Exception as e:
+                print(f"⚠️ Error processing a show card for {search_term}: {e}")
+                continue
+        
+        for show_data in to_process:
+            try:
+                driver.get(show_data["url"])
+                ensure_event_page(driver) # הפונקציה שלך שמטפלת בדפי נחיתה
+                
                 select_area(driver)
-                # Count the seats
                 available = count_empty_seats(driver)
                 
                 show_data["available_seats"] = available
-                show_data["site_tag"] = site_tag # This tells the updater if it's Papi, Friends, or Hall
-                
                 found_shows.append(show_data)
-                print(f"✅ Scraped: {show_data['name']} on {show_data['date']} | Seats: {available}")
-            
+                print(f"✅ Scraped Seats: {show_data['name']} | Date: {show_data['date']} | Seats: {available}")
+                
             except Exception as e:
-                print(f"❌ Error while checking seats at {url}: {e}")
+                print(f"❌ Error extracting seats for {show_data['url']}: {e}")
 
     except Exception as e:
         print(f"❌ Critical error searching for '{search_term}' at {base_url}: {e}")
