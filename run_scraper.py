@@ -361,6 +361,8 @@ def update_appsheet_batch(shows):
     israel_tz = pytz.timezone("Asia/Jerusalem")
     now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M:%S') 
 
+    exclude_words = ["סוואנה", "אפריקה", "הפקת הענק"]
+
     updates = []
     for show in shows:
         try:
@@ -371,6 +373,7 @@ def update_appsheet_batch(shows):
         scraped_name = show["name"].strip()
         # clean_scraped_name = scraped_name.replace('"', '').replace("'", "").replace(".", "").strip()
         clean_scraped_name = " ".join(scraped_name.replace("–", "-").replace(".", "").split()).lower()
+        short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
 
         if "סימבה" in scraped_name and all(x not in scraped_name for x in ["סוואנה", "אפריקה"]): scraped_name = "סימבה מלך"
 
@@ -400,15 +403,12 @@ def update_appsheet_batch(shows):
             # Comparison (Name + Date + Org)
             row_org = row.get("ארגון", "").strip()
 
-            short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
-            
             name_match = (short_name.lower() in clean_scraped_name.lower()) or \
                         (clean_scraped_name.lower() in short_name.lower())
-            # maybe add hall matching logic here in the future if needed, but it can be tricky due to naming variations
-            # row_hall = row.get("אולם", "").strip()
-            # נבדוק אם יש מילה משותפת משמעותית בשם האולם (למשל "נס ציונה")
-            # hall_keywords = [w for w in row_hall.split() if len(w) > 2 and w not in ["היכל", "התרבות", "אולם"]]
-            # hall_match = any(word in scraped_hall for word in hall_keywords)
+            
+            if "סימבה" in clean_scraped_name:
+                if any(word in clean_scraped_name for word in exclude_words):
+                    name_match = False
 
             # Match by Name, Date, and Organization
             if (name_match) and \
