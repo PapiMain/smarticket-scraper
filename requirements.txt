@@ -1,5 +1,4 @@
-selenium
-chromedriver-autoinstaller
 pytz
 requests
 py-appsheet
+seleniumbase

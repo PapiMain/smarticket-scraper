@@ -19,24 +19,28 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Browser and Xvfb Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y xvfb libnss3 libgbm1 libasound2t64 xauth
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          sbase install chromedriver
 
       - name: Install Chrome and ChromeDriver
         run: |
           sudo apt update
           sudo apt install -y chromium-browser chromium-chromedriver
 
-      - name: Run scraper
+      - name: Run scraper with Xvfb
         env:
           APPSHEET_APP_ID: ${{ secrets.APPSHEET_APP_ID }}
           APPSHEET_APP_KEY: ${{ secrets.APPSHEET_APP_KEY }}
           CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
         run: |
-          python run_scraper.py
-
+          xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python run_scraper.py
       - name: Upload screenshots
         if: always() # Ensure this runs even if the scraper fails
         uses: actions/upload-artifact@v4

@@ -1,6 +1,4 @@
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import random
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -14,16 +12,7 @@ from datetime import datetime
 import pytz
 import re
 from py_appsheet import AppSheetClient
-
-SITES = {
-    "friends": {
-        "base_url": "https://friends.smarticket.co.il/",
-        "sheet_tab": "Friends"
-    },
-    "papi": {
-        "base_url": "https://papi.smarticket.co.il/",
-        "sheet_tab": "Papi"
-    },}
+from seleniumbase import Driver
 
 HEBREW_MONTHS = {
     "ינואר": 1,
@@ -39,8 +28,6 @@ HEBREW_MONTHS = {
     "נובמבר": 11,
     "דצמבר": 12
 }
-
-CAPSOLVER_API_KEY = os.environ.get("CAPSOLVER_API_KEY")  # store your CapSolver API key in env variable
 
 # Helper function to clean URLs from AppSheet, handling both direct strings and HYPERLINK formulas
 def clean_url(url_data):
@@ -111,7 +98,20 @@ def get_optimized_targets():
     # 1. Create a mapping of Full Production Name -> Short Name
     # (Since events table likely uses the full name)
     prod_name_to_short = {p.get("שם הפקה מלא"): p.get("שם מקוצר") for p in productions if p.get("שם הפקה מלא")}
-    all_short_names = [p.get("שם מקוצר") for p in productions if p.get("שם מקוצר")]
+
+    active_production_dates = {} # { "סבא אליעזר": ["14/03/2026", "28/03/2026"] }
+
+    for e in events:
+        full_name = e.get("הפקה")
+        date = e.get("תאריך") # וודא שזה הפורמט שמופיע באתר (למשל DD/MM/YYYY)
+        short = prod_name_to_short.get(full_name)
+        if short and date:
+            if short not in active_production_dates:
+                active_production_dates[short] = []
+            active_production_dates[short].append(date)
+
+    all_short_names = list(active_production_dates.keys())
+    print(f"🎯 Found {len(all_short_names)} active productions with future events.")
 
     # 2. Create Hall URL lookup
     hall_url_map = {}    # Map Hall Name -> Clean String URL
@@ -158,30 +158,18 @@ def get_optimized_targets():
     hall_targets = {k: list(v) for k, v in hall_targets.items()}
     print(f"   - Halls to visit: {len(hall_targets)}")
 
-    return all_short_names, hall_targets
+    return all_short_names, hall_targets, active_production_dates
 
-# Set up Selenium WebDriver
+# 2. Update get_driver to use SeleniumBase UC Mode
 def get_driver():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
-    options.binary_location = "/usr/bin/chromium-browser"  # 👈 important
-    options.add_argument("--disable-blink-features=AutomationControlled")
-
-    service = Service(executable_path="/usr/bin/chromedriver")
-    driver = webdriver.Chrome(service=service, options=options)
-
-    # Now you can safely inject the stealth JS
-    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
-        "source": """
-        Object.defineProperty(navigator, 'webdriver', {get: () => undefined})
-        """
-    })
-
-    return driver
+    return Driver(
+        browser="chrome",
+        uc=True,
+        headless=False,  # Set to False so PyAutoGUI/UC can work
+        no_sandbox=True,
+        disable_gpu=True,
+        incognito=True
+    )
 
 # Save screenshot for debugging
 def save_debug(driver, show_name, suffix):
@@ -245,333 +233,6 @@ def save_debug(driver, show_name, suffix):
     except Exception as e:
         print(f"⚠️ Error while saving assets: {e}")
 
-# Check if current page is a CAPTCHA page
-def is_captcha_page(driver, show_name="unknown"):
-    html = driver.page_source.lower()
-    title = driver.title.lower()
-
-    # Detect real captcha indicators
-    if ("iframe" in html and "recaptcha" in html) or \
-       "g-recaptcha" in html or \
-       "cf-challenge" in html or \
-       "verifying" in html:
-        print(f"⚠️ CAPTCHA elements detected for '{show_name}'")
-        # print("ℹ️ Page title:", title)
-        # print("ℹ️ First 500 chars of HTML:", html[:500])
-        # save_debug(driver, show_name, "captcha")
-        return True
-
-    # Quick check: Cloudflare interstitial
-    if "just a moment" in title:
-        print(f"⏳ Cloudflare interstitial detected (not necessarily captcha) for '{show_name}'")
-        save_debug(driver, show_name, "cf_interstitial")
-        return False
-
-    print(f"✅ No CAPTCHA detected for '{show_name}'")
-    return False
-
-# Heuristic function to find Turnstile sitekey using multiple strategies
-def find_turnstile_sitekey(driver, verbose=True):
-    """
-    Try multiple strategies to discover a Cloudflare Turnstile sitekey on the page.
-    Returns sitekey string if found, else None.
-    Strategies:
-      - iframe[src*="turnstile"] query param k=
-      - elements with data-sitekey attribute
-      - search page_source for Turnstile-like keys (start with '0x')
-      - inspect inline <script> tags text for '0x...' occurrences
-      - check common window variables via execute_script
-    """
-    try:
-        # 1) iframe[src*="turnstile"] -> ?k=SITEKEY
-        try:
-            iframe = driver.find_element(By.CSS_SELECTOR, "iframe[src*='turnstile']")
-            src = iframe.get_attribute("src") or ""
-            if "k=" in src:
-                parsed = urlparse(src)
-                q = parse_qs(parsed.query)
-                site_key = q.get("k", [None])[0]
-                if site_key:
-                    if verbose: print(f"🧩 sitekey from turnstile iframe src: {site_key}")
-                    return site_key
-        except Exception:
-            pass
-
-        # 2) any element with data-sitekey
-        try:
-            el = driver.find_element(By.CSS_SELECTOR, "[data-sitekey]")
-            site_key = el.get_attribute("data-sitekey")
-            if site_key:
-                if verbose: print(f"🧩 sitekey from data-sitekey attribute: {site_key}")
-                return site_key
-        except Exception:
-            pass
-
-        # 3) search whole page_source for a Turnstile-looking key (Turnstile keys often start with "0x")
-        try:
-            src = driver.page_source
-            # pattern: 0x followed by at least 10 chars (alphanumeric)
-            m = re.search(r"(0x[a-zA-Z0-9_\-]{8,60})", src)
-            if m:
-                site_key = m.group(1)
-                if verbose: print(f"🧩 sitekey found in page_source (regex): {site_key}")
-                return site_key
-        except Exception:
-            pass
-
-        # 4) search inline script tags text
-        try:
-            scripts = driver.find_elements(By.TAG_NAME, "script")
-            for s in scripts:
-                try:
-                    txt = s.get_attribute("innerText") or ""
-                    m = re.search(r"(0x[a-zA-Z0-9_\-]{8,60})", txt)
-                    if m:
-                        site_key = m.group(1)
-                        if verbose: print(f"🧩 sitekey found inside <script>: {site_key}")
-                        return site_key
-                except Exception:
-                    continue
-        except Exception:
-            pass
-
-        # 5) attempt some common JS variables (Friends or sites sometimes expose it)
-        try:
-            js_try = """
-                return window.turnstileSiteKey
-                    || window.turnstile_site_key
-                    || window.__cf_turnstile_sitekey
-                    || window.Turnstile?.siteKey
-                    || (document.querySelector('[data-sitekey]') && document.querySelector('[data-sitekey]').getAttribute('data-sitekey'))
-                    || null;
-            """
-            site_key = driver.execute_script(js_try)
-            if site_key:
-                if verbose: print(f"🧩 sitekey obtained from window var: {site_key}")
-                return site_key
-        except Exception:
-            pass
-
-        # nothing found
-        if verbose: print("⚠️ No sitekey found with heuristics")
-        return None
-
-    except Exception as e:
-        if verbose: print(f"⚠️ find_turnstile_sitekey error: {e}")
-        return None
-
-# Solve CAPTCHA using CapSolver
-def solve_captcha(site_url, site_key=None, captcha_type="recaptcha"):
-    """
-    Uses CapSolver to solve reCAPTCHA v2, Cloudflare Turnstile, or fall back to
-    AntiTurnstileTask when no site_key is available (Cloudflare managed challenge).
-
-    Args:
-        site_url (str): URL of the page where the captcha appears.
-        site_key (str|None): sitekey if known (for recaptcha/turnstile). May be None.
-        captcha_type (str): "recaptcha", "turnstile" or "auto". If "auto", we will
-                            prefer recaptcha/turnstile when site_key present, else AntiTurnstileTask.
-
-    Returns:
-        str: solved token string.
-
-    Raises:
-        Exception on createTask error or timeout.
-    """
-    print(f"🧩 Starting CAPTCHA solve (type={captcha_type}, has_site_key={bool(site_key)}) via CapSolver...")
-
-    # Normalize captcha_type
-    captcha_type = (captcha_type or "recaptcha").lower()
-
-    # Decide which CapSolver task to use
-    if captcha_type == "recaptcha" and site_key:
-        task = {
-            "type": "NoCaptchaTaskProxyless",
-            "websiteURL": site_url,
-            "websiteKey": site_key
-        }
-        chosen = "NoCaptchaTaskProxyless (reCAPTCHA v2)"
-    elif captcha_type == "turnstile" and site_key:
-        task = {
-            "type": "AntiTurnstileTaskProxyLess",
-            "websiteURL": site_url,
-            "websiteKey": site_key
-        }
-        chosen = "AntiTurnstileTaskProxyLess (Cloudflare Turnstile with sitekey)"
-    elif captcha_type == "cloudflare_challenge": # <--- NEW BLOCK
-        task = {
-            "type": "AntiCloudflareTaskProxyLess", # <--- Use the general challenge bypass task
-            "websiteURL": site_url
-            # NO websiteKey required for this task type
-        }
-        chosen = "AntiCloudflareTaskProxyLess (general Cloudflare Challenge)"
-    elif captcha_type == "anti_turnstile":
-        # task = {
-        #     "type": "AntiTurnstileTaskProxyLess",
-        #     "websiteURL": site_url
-        # }
-        raise Exception("❌ The 'anti_turnstile' task type requires a websiteKey in the current CapSolver version.")
-    else:
-        raise Exception("❌ No valid captcha_type or site_key detected for CapSolver")
-
-
-    print(f"🔧 Creating CapSolver task: {chosen}")
-
-    # Retry loop for robustness
-    max_retries = 3
-    for attempt_retry in range(1, max_retries + 1):
-        try:
-            print(f"🚀 Attempt {attempt_retry}/{max_retries} to create task...")
-            data = {"clientKey": CAPSOLVER_API_KEY, "task": task}
-            create_task_resp = requests.post("https://api.capsolver.com/createTask", json=data, timeout=30)
-            create_task = create_task_resp.json()
-        except Exception as e:
-            print(f"⚠️ CreateTask request failed: {e}")
-            if attempt_retry < max_retries:
-                time.sleep(5)
-                continue
-            raise
-
-        if create_task.get("errorId") != 0:
-            print(f"❌ CapSolver createTask error: {create_task}")
-            if attempt_retry < max_retries:
-                time.sleep(5)
-                continue
-            raise Exception(f"CapSolver createTask error after retries: {create_task}")
-
-        task_id = create_task.get("taskId")
-        if not task_id:
-            if attempt_retry < max_retries:
-                print("⚠️ No taskId returned, retrying...")
-                time.sleep(5)
-                continue
-            raise Exception(f"CapSolver returned no taskId after retries: {create_task}")
-
-        # 2️⃣ Poll result
-        max_attempts = 45   # ~90s
-        for attempt in range(max_attempts):
-            time.sleep(2)
-            try:
-                result = requests.post(
-                    "https://api.capsolver.com/getTaskResult",
-                    json={"clientKey": CAPSOLVER_API_KEY, "taskId": task_id},
-                    timeout=30
-                ).json()
-            except Exception as e:
-                print(f"⚠️ Polling attempt {attempt+1} failed: {e}")
-                continue
-
-            status = result.get("status")
-            if status == "ready":
-                solution = result.get("solution", {})
-                token = None
-                if "gRecaptchaResponse" in solution:
-                    token = solution.get("gRecaptchaResponse")
-                elif "token" in solution:
-                    token = solution.get("token")
-                elif "cfTurnstileResponse" in solution:
-                    token = solution.get("cfTurnstileResponse")
-                else:
-                    for v in solution.values():
-                        if isinstance(v, str) and len(v) > 50:
-                            token = v
-                            break
-
-                if not token:
-                    raise Exception(f"CapSolver returned ready but no recognizable token: {solution}")
-
-                print("✅ CAPTCHA solved successfully")
-                return token
-
-            if attempt % 5 == 0:
-                print(f"⏳ Waiting for solution... attempt {attempt+1}/{max_attempts}")
-
-        # Polling timed out
-        print("⌛ Timed out waiting for captcha solution")
-        if attempt_retry < max_retries:
-            time.sleep(5)
-            continue
-        raise Exception("❌ CAPTCHA solving timed out after retries")
-
-# Enhanced CAPTCHA handler that tries to find Turnstile sitekey and falls back to general Cloudflare Challenge if not found. It also saves debug info on failure.
-def handle_captcha(driver, name, is_captcha):
-    """
-    Improved handler:
-      - Wait for Turnstile iframe or data-sitekey
-      - Try many heuristics to extract a Turnstile sitekey (find_turnstile_sitekey)
-      - If a sitekey is found -> call solve_captcha(..., captcha_type='turnstile')
-      - If not found -> save debug (html + images) and optionally ask for manual solve
-    """
-    if not is_captcha:
-        return False
-
-    try:
-        site_url = driver.current_url
-
-        # 1) quick wait for any sign of Turnstile or captcha
-        try:
-            WebDriverWait(driver, 8).until(
-                lambda d: d.find_element(By.CSS_SELECTOR, "iframe[src*='turnstile'], [data-sitekey], iframe[src*='recaptcha'], .g-recaptcha"), 
-            )
-        except Exception:
-            # we continue — page might still have dynamic JS that sets sitekey, so proceed
-            pass
-
-        # 2) try to extract sitekey using helper (search scripts, DOM, window vars)
-        site_key = find_turnstile_sitekey(driver, verbose=True)
-
-        # Determine the best solving strategy
-        page_title = driver.title.lower()
-
-        if "just a moment..." in page_title:
-            # This is the full-page challenge, which often does not need a sitekey
-            captcha_type = "cloudflare_challenge"
-            site_key = None # Explicitly discard any potential false positive sitekey
-            print("✅ Full-page 'just a moment...' detected. Using general CapSolver Cloudflare Challenge task.")
-            
-        elif site_key:
-            # If a sitekey was reliably found (e.g., not the regex false positive)
-            captcha_type = "turnstile"
-            print("✅ Turnstile sitekey found. Using Turnstile task with sitekey.")
-        else:
-            # Fallback to anti_turnstile if no reliable key was found
-            captcha_type = "cloudflare_challenge"
-            print("⚠️ No sitekey found, falling back to general Cloudflare Challenge task.")
-
-        # 3) call solve_captcha. If site_key is None and solver expects a websiteKey, solve_captcha may raise.
-        token = solve_captcha(site_url, site_key, captcha_type=captcha_type)
-        print("✅ Got CAPTCHA token:", token[:40], "...")
-
-        # 4) inject token (Turnstile uses cf-turnstile-response)
-        try:
-            driver.execute_script("""
-                (function(token){
-                    var el = document.querySelector('input[name="cf-turnstile-response"]');
-                    if (!el) {
-                        el = document.createElement('input');
-                        el.type = 'hidden';
-                        el.name = 'cf-turnstile-response';
-                        // attach to first form or body
-                        var f = document.forms[0] || document.body;
-                        f.appendChild(el);
-                    }
-                    el.value = token;
-                    el.dispatchEvent(new Event("input", {bubbles:true}));
-                    el.dispatchEvent(new Event("change", {bubbles:true}));
-                })(arguments[0]);
-            """, token)
-        except Exception as e:
-            print("⚠️ Failed to inject token via cf-turnstile-response:", e)
-
-        save_debug(driver, name, "after_inject")
-        time.sleep(5)
-        return True
-
-    except Exception as e:
-        print("❌ Captcha handling failed:", str(e))
-        save_debug(driver, name, "captcha_fail")
-        return False
-
 # Parse Hebrew date string
 def parse_hebrew_date(date_str):
     """
@@ -579,14 +240,18 @@ def parse_hebrew_date(date_str):
     'ביום שבת, 15 בנובמבר 2025' → '15/11/2025'
     'יום רביעי, 17 ספטמבר 2025' → '17/09/2025'
     """
+    if not date_str or not isinstance(date_str, str):
+        return ""
+    
     try:
-        # Remove leading 'ביום' or 'יום' and any commas
-        clean = re.sub(r"ביום\s+|יום\s+|,", "", date_str).strip()
+        # ניקוי רווחים כפולים ותווים מוזרים
+        clean = " ".join(date_str.split())
+        clean = re.sub(r"ביום\s+|יום\s+|,", "", clean).strip()
 
         # Extract numeric day, month (with optional prefix ב), and year
         match = re.search(r"(\d{1,2})\s+ב?([א-ת]+)\s+(\d{4})", clean)
         if not match:
-            raise ValueError(f"Cannot parse Hebrew date: {date_str}")
+            return "" 
 
         day = int(match.group(1))
         month_name = match.group(2)
@@ -594,27 +259,13 @@ def parse_hebrew_date(date_str):
 
         month = HEBREW_MONTHS.get(month_name)
         if not month:
-            raise ValueError(f"Unknown Hebrew month: {month_name}")
+            return ""
 
         return datetime(year, month, day).strftime("%d/%m/%Y")
 
     except Exception as e:
         print(f"⚠️ Failed to parse date '{date_str}': {e}")
-        return date_str
-
-# Step 1: Get all show URLs from the search results
-def get_show_urls(driver):
-    try:
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
-        )
-        show_elements = driver.find_elements(By.CSS_SELECTOR, "a.show")
-        urls = [el.get_attribute("href") for el in show_elements if el.get_attribute("href")]
-        print(f"✅ Found {len(urls)} show URLs")
-        return urls
-    except TimeoutException:
-        print("ℹ️ No shows found for this search.")
-        return []
+        return ""
 
 # Check if we're on a landing page and navigate to the event page if needed
 def ensure_event_page(driver):
@@ -644,52 +295,6 @@ def ensure_event_page(driver):
         except Exception as e:
             print(f"⚠️ Navigation to event page failed: {e}")
     return False
-
-# Step 2: Extract show details from an individual show page
-def extract_show_details(driver, url):
-    show = {"url": url}
-    try:
-        driver.get(url)
-
-        ensure_event_page(driver)
-
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "div.show_details"))
-        )
-
-        container = driver.find_element(By.CSS_SELECTOR, "div.show_details")
-
-        # Title
-        show["name"] = container.find_element(By.CSS_SELECTOR, "h1").text.strip()
-
-        # Hall (remove "מפת הגעה")
-        hall_text = container.find_element(By.CSS_SELECTOR, ".theater").text.strip()
-        show["hall"] = hall_text.replace("(מפת הגעה)", "").strip()
-
-        # Date
-        raw_date = container.find_element(By.CSS_SELECTOR, ".event-date").text.strip()
-        show["date"] = parse_hebrew_date(raw_date)  # stays only date
-
-        # Time (clean string, keep only time)
-        raw_time = container.find_element(By.CSS_SELECTOR, ".event-time").text.strip()
-        show["time"] = raw_time.replace("בשעה", "").strip()
-
-        # Price range
-        try:
-            price_text = container.find_element(By.CSS_SELECTOR, ".price_range").text.strip()
-            show["price"] = price_text
-        except:
-            show["price"] = ""
-
-        print(
-            f"🎭 Extracted show: {show['name']} - {show['hall']} "
-            f"({show['date']} | {show['time']}) - {show['price']}"
-        )        
-
-    except Exception as e:
-        print(f"❌ Failed to extract show from {url}: {e}")
-
-    return show
 
 # Select area if area selection table appears (some shows require selecting an area before showing the seat map)
 def select_area(driver):
@@ -756,15 +361,19 @@ def update_appsheet_batch(shows):
     israel_tz = pytz.timezone("Asia/Jerusalem")
     now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M:%S') 
 
+    exclude_words = ["סוואנה", "אפריקה", "הפקת הענק"]
+
     updates = []
     for show in shows:
-        # scraped_date = show["date"] # Assuming format 'DD/MM/YYYY'
         try:
             scraped_date_obj = datetime.strptime(show["date"], "%d/%m/%Y").date()
         except:
             continue
 
         scraped_name = show["name"].strip()
+        # clean_scraped_name = scraped_name.replace('"', '').replace("'", "").replace(".", "").strip()
+        clean_scraped_name = " ".join(scraped_name.replace("–", "-").replace(".", "").split()).lower()
+        short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
 
         if "סימבה" in scraped_name and all(x not in scraped_name for x in ["סוואנה", "אפריקה"]): scraped_name = "סימבה מלך"
 
@@ -780,7 +389,6 @@ def update_appsheet_batch(shows):
         match = None
         for row in current_rows:
             app_date_raw = row.get("תאריך")
-            if not app_date_raw: continue
 
             # Date Format Guesser: AppSheet might send YYYY-MM-DD or MM/DD/YYYY
             app_date_obj = None
@@ -790,21 +398,27 @@ def update_appsheet_batch(shows):
                     break
                 except: continue
 
-            if not app_date_obj: continue
+            if app_date_obj != scraped_date_obj: continue
 
             # Comparison (Name + Date + Org)
-            row_name = row.get("הפקה", "").strip()
             row_org = row.get("ארגון", "").strip()
 
+            name_match = (short_name.lower() in clean_scraped_name.lower()) or \
+                        (clean_scraped_name.lower() in short_name.lower())
+            
+            if "סימבה" in clean_scraped_name or "פיטר פן" in clean_scraped_name:
+                if any(word in clean_scraped_name for word in exclude_words):
+                    name_match = False
+
             # Match by Name, Date, and Organization
-            if (scraped_name in row_name or row_name in scraped_name) and \
+            if (name_match) and \
             app_date_obj == scraped_date_obj and \
             row_org == org_value:
                 match = row
                 break
         
         if not match:
-            print(f"❌ No AppSheet match for: {scraped_name} on {show['date']} ({org_value})")
+            print(f"❌ No AppSheet match for: {scraped_name} vs {short_name} on {show['date']} ({org_value})")
 
         if match:
             # Calculate 'נמכרו' (Sold) logic
@@ -843,7 +457,7 @@ def update_appsheet_batch(shows):
         print("❌ No matching rows found in AppSheet.")
 
 # Main function to run the search logic for a given site and search term, returning found shows with availability
-def run_search_logic(driver, base_url, search_term, site_tag):
+def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
     """
     Handles the actual search process on a specific website.
     Returns a list of 'show' dictionaries.
@@ -855,37 +469,112 @@ def run_search_logic(driver, base_url, search_term, site_tag):
     print(f"🔍 Navigating to: {search_url}")
     
     try:
-        driver.get(search_url)
 
-        # 2. CAPTCHA Check
-        if is_captcha_page(driver, search_term):
-            solved = handle_captcha(driver, search_term, True)
-            if not solved:
-                print(f"⚠️ Skipping '{search_term}' due to unsolved CAPTCHA.")
-                return []
+        time.sleep(random.uniform(2, 4)) # Add a tiny human-like delay
+        # UC Mode navigation: This handles the 'Just a moment' challenge automatically
+        driver.uc_open_with_reconnect(search_url, reconnect_time=10)
 
-        # 3. Get all show URLs from the search results
-        urls = get_show_urls(driver)
+        # If we are still blocked, try one "human" click
+        if "Just a moment" in driver.title:
+            print("🛡️ Cloudflare detected, attempting internal bypass...")
+            driver.uc_gui_click_captcha() # SeleniumBase handles the "no mouse" issue better now
+            time.sleep(4)
         
-        # 4. Process each individual show found
-        for url in urls:
-            show_data = extract_show_details(driver, url)
-            
-            if show_data.get("name"):
-                try:
-                    # Enter the seat map
-                    select_area(driver)
-                    # Count the seats
-                    available = count_empty_seats(driver)
-                    
-                    show_data["available_seats"] = available
-                    show_data["site_tag"] = site_tag # This tells the updater if it's Papi, Friends, or Hall
-                    
-                    found_shows.append(show_data)
-                    print(f"✅ Scraped: {show_data['name']} on {show_data['date']} | Seats: {available}")
+        print("📜 Scrolling to load all cards...")
+        for _ in range(4): # 4 גלילות קטנות
+            driver.execute_script("window.scrollBy(0, 800);")
+            time.sleep(1)
+
+        try:
+            WebDriverWait(driver, 7).until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
+            )
+        except TimeoutException:
+            print(f"ℹ️ No results for '{search_term}'")
+            return []
+        
+        valid_dates = active_dates_map.get(search_term, [])
+        normalized_valid_dates = []
+        for d in valid_dates:
+            try:
+                # אם התאריך הגיע כ-MM/DD/YYYY, נהפוך אותו ל-DD/MM/YYYY
+                dt = datetime.strptime(d, "%m/%d/%Y")
+                normalized_valid_dates.append(dt.strftime("%d/%m/%Y"))
+            except:
+                normalized_valid_dates.append(d)
+
+        print(f"🎯 Target dates for '{search_term}': {normalized_valid_dates}")
+        
+        show_cards = driver.find_elements(By.CSS_SELECTOR, "a.show")
+        total = len(show_cards)
+        print(f"🔍 Found {total} show cards for '{search_term}' before date filtering.")
+
+        # שמירת לינקים ונתונים שצריך לבדוק מושבים עבורם
+        to_process = []
+        
+        for i, card in enumerate(show_cards):
+            try:
+                driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
+                time.sleep(0.2)
+
+                # חילוץ נתונים ישירות מהכרטיסייה (ה-HTML ששלחת)
+                raw_date = driver.execute_script("return arguments[0].querySelector('.date_container').innerText;", card).strip()
+                full_name = driver.execute_script("return arguments[0].querySelector('h2').innerText;", card).strip()
                 
-                except Exception as e:
-                    print(f"❌ Error while checking seats at {url}: {e}")
+                parsed_date = parse_hebrew_date(raw_date)
+
+                print(f"   [{i+1}/{total}] Card Name: '{full_name}' | Date: '{parsed_date}'")
+
+                if not parsed_date or not full_name:
+                    # אם עדיין ריק, ננסה גלילה קטנה לאלמנט הספציפי
+                    driver.execute_script("arguments[0].scrollIntoView();", card)
+                    raw_date = driver.execute_script("return arguments[0].querySelector('.date_container').innerText;", card).strip()
+                    full_name = driver.execute_script("return arguments[0].querySelector('h2').innerText;", card).strip()
+                    parsed_date = parse_hebrew_date(raw_date)
+                
+                # אם התאריך לא ברשימה שלנו - מדלגים מיד בלי להיכנס ללינק!
+                if normalized_valid_dates and parsed_date not in normalized_valid_dates:
+                    print(f"⏩ Skipping {parsed_date} (Not in targets)")
+                    continue
+                else:
+                     print(f"🎯 Date {parsed_date} is a target! Processing this show.")
+                    
+                # אם עברנו את הסינון, נאסוף את שאר הנתונים מהכרטיסייה
+                hall = driver.execute_script("return arguments[0].querySelector('.theater_container').innerText;", card).strip().replace("(מפת הגעה)", "")
+                time_val = driver.execute_script("return arguments[0].querySelector('.time_container').innerText;", card).replace("בשעה", "").strip()
+
+                show_info = {
+                    "url": card.get_attribute("href"),
+                    "name": full_name,
+                    "hall": hall,
+                    "date": parsed_date,
+                    "time": time_val,
+                    "site_tag": site_tag,
+                    "searched_name": search_term
+                }
+                to_process.append(show_info)
+                print(f"⭐ Match found: {show_info['name']} - {show_info['hall']} on {parsed_date} - {show_info['time']}. Adding to queue.")
+
+            except Exception as e:
+                print(f"⚠️ Error processing a show card for {search_term}: {e}")
+                print(f"   [{i+1}/{total}] ⚠️ Error reading card: {str(e)[:50]}")
+                continue
+        
+        for show_data in to_process:
+            try:
+                print(f"⭐ Processing match: {show_data['name']} on {show_data['date']}")
+                driver.get(show_data["url"])
+                ensure_event_page(driver) # הפונקציה שלך שמטפלת בדפי נחיתה
+                
+                select_area(driver)
+                available = count_empty_seats(driver)
+                
+                show_data["available_seats"] = available
+                found_shows.append(show_data)
+                print(f"✅ Scraped Seats: {show_data['name']} | Date: {show_data['date']} | Seats: {available}")
+                
+            except Exception as e:
+                print(f"❌ Error extracting seats for {show_data['url']}: {e}")
 
     except Exception as e:
         print(f"❌ Critical error searching for '{search_term}' at {base_url}: {e}")
@@ -895,21 +584,21 @@ def run_search_logic(driver, base_url, search_term, site_tag):
 
 # Main orchestrator function to scrape all targets and update AppSheet
 def scrape_everything():
-    short_names, hall_targets = get_optimized_targets()
+    short_names, hall_targets, active_dates_map = get_optimized_targets()
     driver = get_driver()
     all_results = []
 
     # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
     main_sites = [
         {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
-        # {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
+        {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
     ]     
 
     for site in main_sites:
         print(f"🌐 Scraping Aggregator: {site['tab']}")
         print(f"🌐 Scraping website: {site['url']}")
         for name in short_names:
-            results = run_search_logic(driver, site['url'], name, site['tab'])
+            results = run_search_logic(driver, site['url'], name, site['tab'], active_dates_map)
             all_results.extend(results)
 
     # --- PART 2: Individual Halls (Search only relevant shows) ---
@@ -917,7 +606,7 @@ def scrape_everything():
         print(f"🏛️ Scraping Hall: {url}")
         for name in specific_shows:
             # We pass "Hall" as the tab so the update logic knows it's a specific hall
-            results = run_search_logic(driver, url, name, "Hall")
+            results = run_search_logic(driver, url, name, "Hall", active_dates_map)
             all_results.extend(results)
 
     # --- PART 3: Batch Update ---
