@@ -406,7 +406,7 @@ def update_appsheet_batch(shows):
             name_match = (short_name.lower() in clean_scraped_name.lower()) or \
                         (clean_scraped_name.lower() in short_name.lower())
             
-            if "סימבה" in clean_scraped_name:
+            if "סימבה" in clean_scraped_name or "פיטר פן" in clean_scraped_name:
                 if any(word in clean_scraped_name for word in exclude_words):
                     name_match = False
 
@@ -590,7 +590,7 @@ def scrape_everything():
 
     # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
     main_sites = [
-        # {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
+        {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
         {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
     ]     
 
@@ -602,12 +602,12 @@ def scrape_everything():
             all_results.extend(results)
 
     # --- PART 2: Individual Halls (Search only relevant shows) ---
-    # for url, specific_shows in hall_targets.items():
-    #     print(f"🏛️ Scraping Hall: {url}")
-    #     for name in specific_shows:
-    #         # We pass "Hall" as the tab so the update logic knows it's a specific hall
-    #         results = run_search_logic(driver, url, name, "Hall", active_dates_map)
-    #         all_results.extend(results)
+    for url, specific_shows in hall_targets.items():
+        print(f"🏛️ Scraping Hall: {url}")
+        for name in specific_shows:
+            # We pass "Hall" as the tab so the update logic knows it's a specific hall
+            results = run_search_logic(driver, url, name, "Hall", active_dates_map)
+            all_results.extend(results)
 
     # --- PART 3: Batch Update ---
     if all_results:
