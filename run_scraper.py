@@ -354,11 +354,6 @@ def update_appsheet_batch(shows):
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
 
-    print("⏳ Fetching productions to map short names...")
-    productions = get_appsheet_data("הפקות")
-    # יצירת מילון: { "שם הפקה": "שם קצר" }
-    name_mapper = {str(row.get("הפקה", "")).strip(): str(row.get("שם קצר", "")).strip() for row in productions}
-
     # 1. Fetch current data to find the IDs
     print("⏳ Fetching current AppSheet data to match IDs...")
     current_rows = get_appsheet_data("כרטיסים")
@@ -405,16 +400,10 @@ def update_appsheet_batch(shows):
             # Comparison (Name + Date + Org)
             row_org = row.get("ארגון", "").strip()
 
-            row_full_name = str(row.get("הפקה", "")).strip()
-            short_name = name_mapper.get(row_full_name)
-            if not short_name:
-                short_name = row_full_name
-                
-            clean_short_name = short_name.replace('"', '').replace("'", "").replace(".", "").strip()
-
+            short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
             
-            name_match = (clean_short_name.lower() in clean_scraped_name.lower()) or \
-                        (clean_scraped_name.lower() in clean_short_name.lower())
+            name_match = (short_name.lower() in clean_scraped_name.lower()) or \
+                        (clean_scraped_name.lower() in short_name.lower())
             # maybe add hall matching logic here in the future if needed, but it can be tricky due to naming variations
             # row_hall = row.get("אולם", "").strip()
             # נבדוק אם יש מילה משותפת משמעותית בשם האולם (למשל "נס ציונה")
@@ -560,7 +549,8 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
                     "hall": hall,
                     "date": parsed_date,
                     "time": time_val,
-                    "site_tag": site_tag
+                    "site_tag": site_tag,
+                    "searched_name": search_term
                 }
                 to_process.append(show_info)
                 print(f"⭐ Match found: {show_info['name']} - {show_info['hall']} on {parsed_date} - {show_info['time']}. Adding to queue.")
