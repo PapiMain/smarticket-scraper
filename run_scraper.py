@@ -441,7 +441,7 @@ def update_appsheet_batch(shows):
     if updates:
         num_updates = len(updates)
 
-        url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/כרטיסים/Action"
+        url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/הופעות עתידיות/Action"
         body = {
             "Action": "Edit",
             "Properties": {"Locale": "en-US"},
@@ -449,7 +449,7 @@ def update_appsheet_batch(shows):
         }
         resp = requests.post(url, json=body, headers={"ApplicationAccessKey": app_key})
         print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
-        print(f"✅ Successfully updated {num_updates} rows in the 'כרטיסים' table.")
+        print(f"✅ Successfully updated {num_updates} rows in the 'הופעות עתידיות' table.")
         if resp.status_code != 200:
             print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
             print(f"❌ AppSheet Update Error: {resp.text}")
