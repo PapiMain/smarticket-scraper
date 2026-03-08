@@ -356,7 +356,7 @@ def update_appsheet_batch(shows):
 
     # 1. Fetch current data to find the IDs
     print("⏳ Fetching current AppSheet data to match IDs...")
-    current_rows = get_appsheet_data("כרטיסים")
+    current_rows = get_appsheet_data("הופעות עתידיות")
     
     israel_tz = pytz.timezone("Asia/Jerusalem")
     now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M:%S') 
