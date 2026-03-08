@@ -427,13 +427,17 @@ def update_appsheet_batch(shows):
                 available = int(show.get("available_seats", 0))
                 sold = total_capacity - available
 
+                if sold < 0:
+                    print(f"⚠️ Warning: Calculated sold tickets is negative for {scraped_name}. Setting sold to 0.")
+                    sold = 0
+
                 # Add to update list - MUST include the 'ID' key
                 updates.append({
                     "ID": match["ID"], 
                     "נמכרו": sold,
                     "עודכן לאחרונה": now_israel
                 })
-                print(f"✅ Prepared update for {scraped_name}: sold-{sold}, ID {match['ID']}")
+                print(f"✅ Prepared update for {scraped_name}, {show['date']}, {org_value}, {show['hall']} - sold:{sold}, ID {match['ID']}")
             except Exception as e:
                 print(f"❌ Calculation error for {scraped_name}: {e}")
     
