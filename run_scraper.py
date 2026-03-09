@@ -371,7 +371,6 @@ def update_appsheet_batch(shows):
             continue
 
         scraped_name = show["name"].strip()
-        # clean_scraped_name = scraped_name.replace('"', '').replace("'", "").replace(".", "").strip()
         clean_scraped_name = " ".join(scraped_name.replace("–", "-").replace(".", "").split()).lower()
         short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
 
@@ -389,6 +388,7 @@ def update_appsheet_batch(shows):
         match = None
         for row in current_rows:
             app_date_raw = row.get("תאריך")
+            app_row_name = row.get("הפקה", "").strip().lower()
 
             # Date Format Guesser: AppSheet might send YYYY-MM-DD or MM/DD/YYYY
             app_date_obj = None
@@ -403,8 +403,8 @@ def update_appsheet_batch(shows):
             # Comparison (Name + Date + Org)
             row_org = row.get("ארגון", "").strip()
 
-            name_match = (short_name.lower() in clean_scraped_name.lower()) or \
-                        (clean_scraped_name.lower() in short_name.lower())
+            name_match = (short_name.lower() in app_row_name) or \
+                         (app_row_name in short_name.lower())
             
             if "סימבה" in clean_scraped_name or "פיטר פן" in clean_scraped_name:
                 if any(word in clean_scraped_name for word in exclude_words):
@@ -418,7 +418,7 @@ def update_appsheet_batch(shows):
                 break
         
         if not match:
-            print(f"❌ No AppSheet match for: {scraped_name} vs {short_name} on {show['date']} ({org_value})")
+            print(f"❌ No AppSheet match for: {scraped_name} vs {short_name} on {scraped_date_obj} ({org_value})")
 
         if match:
             # Calculate 'נמכרו' (Sold) logic
@@ -427,13 +427,17 @@ def update_appsheet_batch(shows):
                 available = int(show.get("available_seats", 0))
                 sold = total_capacity - available
 
+                if sold < 0:
+                    print(f"⚠️ Warning: Calculated sold tickets is negative for {scraped_name} - {show['hall']}, {scraped_date_obj} ({org_value}) ({match['ID']}). Setting sold to 0.")
+                    sold = 0
+
                 # Add to update list - MUST include the 'ID' key
                 updates.append({
                     "ID": match["ID"], 
                     "נמכרו": sold,
                     "עודכן לאחרונה": now_israel
                 })
-                print(f"✅ Prepared update for {scraped_name}: sold-{sold}, ID {match['ID']}")
+                print(f"✅ Prepared update for {scraped_name}, {show['hall']}, {scraped_date_obj}, ({org_value}) - sold:{sold}, ID {match['ID']}")
             except Exception as e:
                 print(f"❌ Calculation error for {scraped_name}: {e}")
     
