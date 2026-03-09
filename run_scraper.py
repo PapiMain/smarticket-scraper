@@ -371,7 +371,6 @@ def update_appsheet_batch(shows):
             continue
 
         scraped_name = show["name"].strip()
-        # clean_scraped_name = scraped_name.replace('"', '').replace("'", "").replace(".", "").strip()
         clean_scraped_name = " ".join(scraped_name.replace("–", "-").replace(".", "").split()).lower()
         short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
 
@@ -389,6 +388,7 @@ def update_appsheet_batch(shows):
         match = None
         for row in current_rows:
             app_date_raw = row.get("תאריך")
+            app_row_name = row.get("הפקה", "").strip().lower()
 
             # Date Format Guesser: AppSheet might send YYYY-MM-DD or MM/DD/YYYY
             app_date_obj = None
@@ -403,8 +403,8 @@ def update_appsheet_batch(shows):
             # Comparison (Name + Date + Org)
             row_org = row.get("ארגון", "").strip()
 
-            name_match = (short_name.lower() in clean_scraped_name.lower()) or \
-                        (clean_scraped_name.lower() in short_name.lower())
+            name_match = (short_name.lower() in app_row_name) or \
+                         (app_row_name in short_name.lower())
             
             if "סימבה" in clean_scraped_name or "פיטר פן" in clean_scraped_name:
                 if any(word in clean_scraped_name for word in exclude_words):
