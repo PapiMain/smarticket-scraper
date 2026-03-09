@@ -86,7 +86,7 @@ def get_optimized_targets():
     
    # Key = Hall Name in AppSheet, Value = The correct URL to use
     special_halls_lookup = {
-        "היכל התרבות מודיעין מכבים רעות": "https://www.shows.org.il/",
+        # "היכל התרבות מודיעין מכבים רעות": "https://www.shows.org.il/",
         "היכל התרבות יבנה": "https://www.htyavne.co.il/",
         "היכל התרבות-בית יד לבנים רעננה": "https://tickets.raanana.muni.il/",
         "תאטרון גבעתיים": "https://t-g.smarticket.co.il/",
