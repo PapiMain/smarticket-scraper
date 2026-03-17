@@ -449,7 +449,10 @@ def update_appsheet_batch(shows):
         url = f"https://api.appsheet.com/api/v1/apps/{app_id}/tables/כרטיסים/Action"
         body = {
             "Action": "Edit",
-            "Properties": {"Locale": "en-US"},
+            "Properties": {
+            "Locale": "en-US",
+            "Timezone": "Israel Standard Time"
+            },
             "Rows": updates
         }
         resp = requests.post(url, json=body, headers={"ApplicationAccessKey": app_key})
