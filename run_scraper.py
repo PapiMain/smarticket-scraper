@@ -359,7 +359,8 @@ def update_appsheet_batch(shows):
     current_rows = get_appsheet_data("הופעות עתידיות")
     
     israel_tz = pytz.timezone("Asia/Jerusalem")
-    now_israel = datetime.now(israel_tz).strftime('%d/%m/%Y %H:%M') 
+    # Format: 2026-03-17 14:09:00
+    now_israel = datetime.now(israel_tz).strftime('%Y-%m-%d %H:%M:00')
 
     exclude_words = ["סוואנה", "אפריקה", "הפקת הענק"]
 
