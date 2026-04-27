@@ -2,9 +2,10 @@ name: Smarticket Scraper
 
 on:
   schedule:
-    - cron: "0 4 * * *" # Runs every day at 07:00 Israel time (UTC+3)
-    - cron: "0 11 * * *" # 2 PM Israel time
-  workflow_dispatch: # Allows manual run from GitHub UI
+    - cron: "0 7 * * *" # Every day
+    - cron: "0 14 * * *" # 2 PM Israel time
+      timezone: 'Asia/Jerusalem'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
 
 jobs:
   run-scraper:
