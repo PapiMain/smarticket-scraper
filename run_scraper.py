@@ -92,7 +92,8 @@ def get_optimized_targets():
         "תאטרון גבעתיים": "https://t-g.smarticket.co.il/",
         "היכל התרבות אור עקיבא": "https://htorakiva.smarticket.co.il/",
         "מרכז אמנויות הבמה שוהם": "https://shoham.smarticket.co.il/",
-        "תאטרון חולון": "https://hth.smarticket.co.il/"
+        "תאטרון חולון": "https://hth.smarticket.co.il/",
+        "היכל אמנויות הבמה הרצליה": "https://hoh-herzliya.smarticket.co.il/"
     }
 
     # 1. Create a mapping of Full Production Name -> Short Name
