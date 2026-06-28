@@ -1,4 +1,7 @@
-pytz
-requests
-py-appsheet
-seleniumbase
+# Top-level dependencies, pinned for reproducible CI runs.
+# (Transitive deps are resolved by pip from these.)
+pytz==2026.2
+requests==2.34.2
+py-appsheet==0.3.0
+seleniumbase==4.50.3
+python-dotenv==1.2.2

@@ -28,16 +28,17 @@ jobs:
           pip install -r requirements.txt
           sbase install chromedriver
 
-      - name: Install Chrome and ChromeDriver
-        run: |
-          sudo apt update
-          sudo apt install -y chromium-browser chromium-chromedriver
+      # NOTE: the previous "apt install chromium-browser" step was removed.
+      # On ubuntu-latest, chromium-browser is a transitional *snap* package; apt
+      # hands it to snapd, which intermittently fails to fetch snap assertions
+      # (HTTP 408 from api.snapcraft.io), breaking the build with dpkg exit 100.
+      # ubuntu-latest already ships Google Chrome pre-installed, and SeleniumBase
+      # UC mode requires real Google Chrome (not the chromium snap) anyway.
 
       - name: Run scraper with Xvfb
         env:
           APPSHEET_APP_ID: ${{ secrets.APPSHEET_APP_ID }}
           APPSHEET_APP_KEY: ${{ secrets.APPSHEET_APP_KEY }}
-          CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python run_scraper.py
       - name: Upload screenshots

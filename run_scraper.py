@@ -13,6 +13,11 @@ import pytz
 import re
 from py_appsheet import AppSheetClient
 from seleniumbase import Driver
+from dotenv import load_dotenv
+
+# Load environment variables from a local .env file (no-op in CI, where the
+# variables are provided as real environment/secret values instead).
+load_dotenv()
 
 HEBREW_MONTHS = {
     "ינואר": 1,
@@ -53,9 +58,12 @@ def get_appsheet_data(table_name):
     )
     
     try:
-        # Pass None as the 'item' to fetch all rows without a specific search term
+        # Pass None as the 'item' to fetch all rows without a specific search term.
+        # NOTE: passing "" here is a bug — py-appsheet then keeps only rows that
+        # contain at least one empty cell (`"" in row.values()`), silently dropping
+        # fully-populated rows. Omitting `item` (defaults to None) returns everything.
         print(f"⏳ Fetching all rows from table: {table_name}")
-        rows = client.find_items(table_name, "")
+        rows = client.find_items(table_name)
         
         if rows:
             print(f"✅ Successfully retrieved {len(rows)} rows from {table_name}")
@@ -82,7 +90,8 @@ def get_optimized_targets():
 
     if not events:
         print("⚠️ No future events found in 'אירועי עתיד'.")
-        return [], {}
+        # Must return 3 values — the caller unpacks (short_names, hall_targets, active_dates_map).
+        return [], {}, {}
     
    # Key = Hall Name in AppSheet, Value = The correct URL to use
     special_halls_lookup = {
@@ -339,9 +348,11 @@ def select_area(driver):
 def count_empty_seats(driver):
     """Count the number of empty seats in the chair_map table."""
     try:
-        # Wait until the table is loaded
+        # Wait until the seat-map table itself renders (any chair present), rather than
+        # waiting specifically for empty chairs. A sold-out show has zero empty chairs,
+        # so the old wait would burn the full timeout and log a false error every time.
         WebDriverWait(driver, 10).until(
-            lambda d: d.find_elements(By.CSS_SELECTOR, "table.chair_map td a.chair.empty")
+            lambda d: d.find_elements(By.CSS_SELECTOR, "table.chair_map td a.chair")
         )
         empty_seats = driver.find_elements(By.CSS_SELECTOR, "table.chair_map td a.chair.empty")
         return len(empty_seats)
@@ -378,6 +389,16 @@ def update_appsheet_batch(shows):
 
         if "סימבה" in scraped_name and all(x not in scraped_name for x in ["סוואנה", "אפריקה"]): scraped_name = "סימבה מלך"
 
+        # Exclude the competing "בת הים הקטנה" (The Little Mermaid) production.
+        # Searching our "בת הים" production also returns the unrelated
+        # "בת הים הקטנה" show on the same dates. Hall/venue can't disambiguate
+        # them (hall names vary per organization), so we exclude by name: any
+        # result containing "הקטנה" is the other production, not ours. This also
+        # covers the "בת ים הקטנה" spelling (without the second ה).
+        if ("בת הים" in clean_scraped_name or "בת ים" in clean_scraped_name) and "הקטנה" in clean_scraped_name:
+            print(f"⏩ Skipping wrong production (בת הים הקטנה): {scraped_name} on {scraped_date_obj}")
+            continue
+
         tag = show.get("site_tag")
         if tag == "Papi":
             org_value = "סמארטיקט"
@@ -390,7 +411,9 @@ def update_appsheet_batch(shows):
         match = None
         for row in current_rows:
             app_date_raw = row.get("תאריך")
-            app_row_name = row.get("הפקה", "").strip().lower()
+            # `or ""` guards against a present-but-None value (key exists, value is None),
+            # which would make .strip() raise AttributeError.
+            app_row_name = (row.get("הפקה") or "").strip().lower()
 
             # Date Format Guesser: AppSheet might send YYYY-MM-DD or MM/DD/YYYY
             app_date_obj = None
@@ -403,7 +426,7 @@ def update_appsheet_batch(shows):
             if app_date_obj != scraped_date_obj: continue
 
             # Comparison (Name + Date + Org)
-            row_org = row.get("ארגון", "").strip()
+            row_org = (row.get("ארגון") or "").strip()
 
             name_match = (short_name.lower() in app_row_name) or \
                          (app_row_name in short_name.lower())
@@ -465,6 +488,38 @@ def update_appsheet_batch(shows):
     else:
         print("❌ No matching rows found in AppSheet.")
 
+# Detect a Cloudflare "Just a moment" interstitial via the page title.
+def is_cloudflare_challenge(driver):
+    try:
+        title = driver.title or ""
+    except Exception:
+        return False
+    return "Just a moment" in title or "Checking your browser" in title
+
+
+# Try to clear a Cloudflare challenge using SeleniumBase UC mode.
+def clear_cloudflare(driver, attempts=3):
+    """
+    Re-checks the page after each click instead of assuming a single attempt worked.
+    Without this, the caller can fall through to a false 'No results' while the
+    challenge is still resolving. Returns True if the challenge appears cleared.
+    """
+    for attempt in range(1, attempts + 1):
+        if not is_cloudflare_challenge(driver):
+            return True
+        print(f"🛡️ Cloudflare detected (attempt {attempt}/{attempts}), attempting bypass...")
+        try:
+            driver.uc_gui_click_captcha()
+        except Exception as e:
+            print(f"⚠️ Captcha click attempt failed: {e}")
+        time.sleep(4)
+
+    if is_cloudflare_challenge(driver):
+        print("❌ Could not clear Cloudflare challenge after retries.")
+        return False
+    return True
+
+
 # Main function to run the search logic for a given site and search term, returning found shows with availability
 def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
     """
@@ -483,12 +538,10 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
         # UC Mode navigation: This handles the 'Just a moment' challenge automatically
         driver.uc_open_with_reconnect(search_url, reconnect_time=10)
 
-        # If we are still blocked, try one "human" click
-        if "Just a moment" in driver.title:
-            print("🛡️ Cloudflare detected, attempting internal bypass...")
-            driver.uc_gui_click_captcha() # SeleniumBase handles the "no mouse" issue better now
-            time.sleep(4)
-        
+        # Clear Cloudflare if present (retries + re-verification so we don't
+        # mistake an unsolved challenge for an empty result set).
+        clear_cloudflare(driver)
+
         print("📜 Scrolling to load all cards...")
         for _ in range(4): # 4 גלילות קטנות
             driver.execute_script("window.scrollBy(0, 800);")

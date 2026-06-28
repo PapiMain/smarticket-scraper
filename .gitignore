@@ -1,3 +1,7 @@
+# SeleniumBase / scraper runtime artifacts
+downloaded_files/
+screenshots/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
