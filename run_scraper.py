@@ -542,10 +542,15 @@ def clear_cloudflare(driver, attempts=3):
 
 
 # Main function to run the search logic for a given site and search term, returning found shows with availability
-def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
+def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map, card_wait=7):
     """
     Handles the actual search process on a specific website.
     Returns a list of 'show' dictionaries.
+
+    card_wait: seconds to wait for result cards (a.show) to render. 7s is fine
+    on a direct connection; the proxied pass passes a larger value because
+    residential-proxy latency delays the results AJAX, and a too-short wait was
+    misreading slow loads as "No results".
     """
     found_shows = []
     
@@ -569,7 +574,7 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
             time.sleep(1)
 
         try:
-            WebDriverWait(driver, 7).until(
+            WebDriverWait(driver, card_wait).until(
                 EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
             )
         except TimeoutException:
@@ -689,13 +694,13 @@ def scrape_everything():
     direct_work = [w for w in work if not needs_proxy(w[0])]
     proxied_work = [w for w in work if needs_proxy(w[0])]
 
-    def run_targets(driver, targets):
+    def run_targets(driver, targets, card_wait=7):
         for url, tab, names in targets:
             label = f"Aggregator: {tab}" if tab != "Hall" else f"Hall: {url}"
             print(f"🌐 Scraping {label}")
             for name in names:
                 all_results.extend(
-                    run_search_logic(driver, url, name, tab, active_dates_map)
+                    run_search_logic(driver, url, name, tab, active_dates_map, card_wait)
                 )
 
     # --- DIRECT DRIVER: everything not behind the datacenter-IP block ---
@@ -720,7 +725,9 @@ def scrape_everything():
                   "Running blocked target(s) WITHOUT proxy — they may be blocked.")
             proxied_driver = get_driver()
         try:
-            run_targets(proxied_driver, proxied_work)
+            # Bigger card-wait: residential-proxy latency delays the results
+            # AJAX, so a 7s wait misreads slow loads as "No results".
+            run_targets(proxied_driver, proxied_work, card_wait=25)
         finally:
             print("🏁 Proxied pass finished. Closing browser.")
             proxied_driver.quit()
