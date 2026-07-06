@@ -39,6 +39,11 @@ jobs:
         env:
           APPSHEET_APP_ID: ${{ secrets.APPSHEET_APP_ID }}
           APPSHEET_APP_KEY: ${{ secrets.APPSHEET_APP_KEY }}
+          # DataImpulse Israeli residential proxy — routes Cloudflare-blocked
+          # halls (e.g. tickets.friends-hist.co.il) through an IL residential IP,
+          # since GitHub's datacenter IPs get blocked. Host/port default in code.
+          PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
+          PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python run_scraper.py
       - name: Upload screenshots

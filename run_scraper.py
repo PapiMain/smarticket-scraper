@@ -14,6 +14,7 @@ import re
 from py_appsheet import AppSheetClient
 from seleniumbase import Driver
 from dotenv import load_dotenv
+from proxy_relay import start_proxy_relay
 
 # Load environment variables from a local .env file (no-op in CI, where the
 # variables are provided as real environment/secret values instead).
@@ -170,15 +171,35 @@ def get_optimized_targets():
 
     return all_short_names, hall_targets, active_production_dates
 
+# Domains that sit behind Cloudflare and block GitHub's datacenter IPs. These get
+# routed through the Israeli residential proxy; everything else runs direct.
+# Default: the friends aggregator, which redirects to the Cloudflare-protected
+# tickets.friends-hist.co.il. Overridable via the PROXY_DOMAINS env var
+# (comma-separated hostnames) — e.g. to add a blocked hall later.
+def get_proxy_domains():
+    raw = os.environ.get("PROXY_DOMAINS", "friends.smarticket.co.il")
+    return {d.strip().lower() for d in raw.split(",") if d.strip()}
+
 # 2. Update get_driver to use SeleniumBase UC Mode
-def get_driver():
+def get_driver(proxy=None, block_images=False):
+    """
+    proxy: local relay address ("127.0.0.1:8899") to route through the Israeli
+    residential proxy, or None for a direct connection.
+
+    When proxied we set incognito=False: incognito strips extensions, and even
+    though the relay avoids the auth-extension problem, keeping a normal (fresh,
+    throwaway) UC profile is the configuration proven to work in testing.
+    block_images cuts residential-proxy data usage.
+    """
     return Driver(
         browser="chrome",
         uc=True,
         headless=False,  # Set to False so PyAutoGUI/UC can work
         no_sandbox=True,
         disable_gpu=True,
-        incognito=True
+        incognito=(proxy is None),
+        proxy=proxy,
+        block_images=block_images,
     )
 
 # Save screenshot for debugging
@@ -647,36 +668,68 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
 # Main orchestrator function to scrape all targets and update AppSheet
 def scrape_everything():
     short_names, hall_targets, active_dates_map = get_optimized_targets()
-    driver = get_driver()
     all_results = []
 
-    # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
-    main_sites = [
-        {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
-        {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
-    ]     
+    proxy_domains = get_proxy_domains()
 
-    for site in main_sites:
-        print(f"🌐 Scraping Aggregator: {site['tab']}")
-        print(f"🌐 Scraping website: {site['url']}")
-        for name in short_names:
-            results = run_search_logic(driver, site['url'], name, site['tab'], active_dates_map)
-            all_results.extend(results)
+    def needs_proxy(url):
+        return (urlparse(url).hostname or "").lower() in proxy_domains
 
-    # --- PART 2: Individual Halls (Search only relevant shows) ---
-    for url, specific_shows in hall_targets.items():
-        print(f"🏛️ Scraping Hall: {url}")
-        for name in specific_shows:
-            # We pass "Hall" as the tab so the update logic knows it's a specific hall
-            results = run_search_logic(driver, url, name, "Hall", active_dates_map)
-            all_results.extend(results)
+    # Build the full work list of (url, tab, [search_names]):
+    #   - Part 1: the two aggregators, searched for every active production
+    #   - Part 2: individual halls, searched for only their relevant shows
+    # "Hall" as the tab tells update_appsheet_batch it's a specific hall.
+    work = [
+        ("https://papi.smarticket.co.il/", "Papi", short_names),
+        ("https://friends.smarticket.co.il/", "Friends", short_names),
+    ]
+    work += [(url, "Hall", names) for url, names in hall_targets.items()]
 
-    # --- PART 3: Batch Update ---
+    # Split by whether the domain is Cloudflare-blocked from datacenter IPs.
+    direct_work = [w for w in work if not needs_proxy(w[0])]
+    proxied_work = [w for w in work if needs_proxy(w[0])]
+
+    def run_targets(driver, targets):
+        for url, tab, names in targets:
+            label = f"Aggregator: {tab}" if tab != "Hall" else f"Hall: {url}"
+            print(f"🌐 Scraping {label}")
+            for name in names:
+                all_results.extend(
+                    run_search_logic(driver, url, name, tab, active_dates_map)
+                )
+
+    # --- DIRECT DRIVER: everything not behind the datacenter-IP block ---
+    driver = get_driver()
+    try:
+        run_targets(driver, direct_work)
+    finally:
+        print("🏁 Direct pass finished. Closing browser.")
+        driver.quit()
+
+    # --- PROXIED DRIVER: Cloudflare-blocked domains via IL residential proxy ---
+    # A separate driver instance because SeleniumBase fixes the proxy at launch
+    # time — it can't be switched mid-session.
+    if proxied_work:
+        proxy_address = start_proxy_relay()
+        if proxy_address:
+            hosts = ", ".join(sorted(proxy_domains))
+            print(f"🇮🇱 Routing {len(proxied_work)} target(s) [{hosts}] through residential proxy at {proxy_address}")
+            proxied_driver = get_driver(proxy=proxy_address, block_images=True)
+        else:
+            print("⚠️ Proxy credentials not set (PROXY_USERNAME/PROXY_PASSWORD). "
+                  "Running blocked target(s) WITHOUT proxy — they may be blocked.")
+            proxied_driver = get_driver()
+        try:
+            run_targets(proxied_driver, proxied_work)
+        finally:
+            print("🏁 Proxied pass finished. Closing browser.")
+            proxied_driver.quit()
+
+    # --- BATCH UPDATE ---
     if all_results:
         update_appsheet_batch(all_results)
-    
-    print("🏁 Scraper finished. Closing browser.")
-    driver.quit()
+
+    print("🏁 Scraper finished.")
 
 # Main entry point
 if __name__ == "__main__":
