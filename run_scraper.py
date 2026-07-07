@@ -14,6 +14,7 @@ import re
 from py_appsheet import AppSheetClient
 from seleniumbase import Driver
 from dotenv import load_dotenv
+from proxy_relay import start_proxy_relay
 
 # Load environment variables from a local .env file (no-op in CI, where the
 # variables are provided as real environment/secret values instead).
@@ -170,15 +171,35 @@ def get_optimized_targets():
 
     return all_short_names, hall_targets, active_production_dates
 
+# Domains that sit behind Cloudflare and block GitHub's datacenter IPs. These get
+# routed through the Israeli residential proxy; everything else runs direct.
+# Default: the friends aggregator, which redirects to the Cloudflare-protected
+# tickets.friends-hist.co.il. Overridable via the PROXY_DOMAINS env var
+# (comma-separated hostnames) — e.g. to add a blocked hall later.
+def get_proxy_domains():
+    raw = os.environ.get("PROXY_DOMAINS", "friends.smarticket.co.il")
+    return {d.strip().lower() for d in raw.split(",") if d.strip()}
+
 # 2. Update get_driver to use SeleniumBase UC Mode
-def get_driver():
+def get_driver(proxy=None, block_images=False):
+    """
+    proxy: local relay address ("127.0.0.1:8899") to route through the Israeli
+    residential proxy, or None for a direct connection.
+
+    When proxied we set incognito=False: incognito strips extensions, and even
+    though the relay avoids the auth-extension problem, keeping a normal (fresh,
+    throwaway) UC profile is the configuration proven to work in testing.
+    block_images cuts residential-proxy data usage.
+    """
     return Driver(
         browser="chrome",
         uc=True,
         headless=False,  # Set to False so PyAutoGUI/UC can work
         no_sandbox=True,
         disable_gpu=True,
-        incognito=True
+        incognito=(proxy is None),
+        proxy=proxy,
+        block_images=block_images,
     )
 
 # Save screenshot for debugging
@@ -345,20 +366,30 @@ def select_area(driver):
     print("🟦 Selected first area (fallback)")
     
 # Count empty seats in the chair_map table
-def count_empty_seats(driver):
-    """Count the number of empty seats in the chair_map table."""
+def count_empty_seats(driver, timeout=10):
+    """
+    Count the number of empty seats in the chair_map table.
+
+    Returns the empty-seat count, or None if the seat map never rendered. None
+    (not 0) matters: a failed measurement must NOT be recorded — writing 0 would
+    make update_appsheet_batch compute sold = capacity - 0 and mark the show as
+    sold out. The caller skips the AppSheet update when this returns None.
+
+    timeout is larger on the proxied pass, where residential-proxy latency delays
+    the seat map (same latency story as the search card-wait).
+    """
     try:
         # Wait until the seat-map table itself renders (any chair present), rather than
         # waiting specifically for empty chairs. A sold-out show has zero empty chairs,
         # so the old wait would burn the full timeout and log a false error every time.
-        WebDriverWait(driver, 10).until(
+        WebDriverWait(driver, timeout).until(
             lambda d: d.find_elements(By.CSS_SELECTOR, "table.chair_map td a.chair")
         )
         empty_seats = driver.find_elements(By.CSS_SELECTOR, "table.chair_map td a.chair.empty")
         return len(empty_seats)
     except Exception as e:
         print(f"❌ Error counting empty seats: {e}")
-        return 0
+        return None
 
 # Step 3: Update AppSheet with the new availability data using the matched IDs
 def update_appsheet_batch(shows):
@@ -386,6 +417,12 @@ def update_appsheet_batch(shows):
         scraped_name = show["name"].strip()
         clean_scraped_name = " ".join(scraped_name.replace("–", "-").replace(".", "").split()).lower()
         short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
+
+        # Skip rows whose seat count failed (None). Writing them would compute
+        # sold = capacity - 0 and record a false sold-out; leave the last good value.
+        if show.get("available_seats") is None:
+            print(f"⏩ Skipping AppSheet update (seat count failed): {scraped_name} on {scraped_date_obj}")
+            continue
 
         if "סימבה" in scraped_name and all(x not in scraped_name for x in ["סוואנה", "אפריקה"]): scraped_name = "סימבה מלך"
 
@@ -521,40 +558,60 @@ def clear_cloudflare(driver, attempts=3):
 
 
 # Main function to run the search logic for a given site and search term, returning found shows with availability
-def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
+def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map, card_wait=7, empty_retries=0):
     """
     Handles the actual search process on a specific website.
     Returns a list of 'show' dictionaries.
+
+    card_wait: seconds to wait for result cards (a.show) to render. 7s is fine
+    on a direct connection; the proxied pass passes a larger value because
+    residential-proxy latency delays the results AJAX, and a too-short wait was
+    misreading slow loads as "No results".
+
+    empty_retries: how many extra times to re-run the search if NO cards appear.
+    On the proxied pass the rotating residential IP occasionally returns an empty
+    page (soft rate-limit / re-challenge); re-navigating gets a fresh IP (DataImpulse
+    rotates per connection), so a retry almost always recovers it. Direct pass uses 0.
     """
     found_shows = []
-    
+    seat_wait = max(card_wait, 10)  # proxied pass needs longer for the seat map too
+
     # 1. Construct and visit the search URL
     search_url = f"{base_url}search?q={quote(search_term)}"
     print(f"🔍 Navigating to: {search_url}")
-    
+
     try:
+        # Navigate + wait for cards, retrying on an empty page (fresh proxy IP each try).
+        cards_found = False
+        for attempt in range(empty_retries + 1):
+            time.sleep(random.uniform(2, 4)) # Add a tiny human-like delay
+            # UC Mode navigation: This handles the 'Just a moment' challenge automatically
+            driver.uc_open_with_reconnect(search_url, reconnect_time=10)
 
-        time.sleep(random.uniform(2, 4)) # Add a tiny human-like delay
-        # UC Mode navigation: This handles the 'Just a moment' challenge automatically
-        driver.uc_open_with_reconnect(search_url, reconnect_time=10)
+            # Clear Cloudflare if present (retries + re-verification so we don't
+            # mistake an unsolved challenge for an empty result set).
+            clear_cloudflare(driver)
 
-        # Clear Cloudflare if present (retries + re-verification so we don't
-        # mistake an unsolved challenge for an empty result set).
-        clear_cloudflare(driver)
+            print("📜 Scrolling to load all cards...")
+            for _ in range(4): # 4 גלילות קטנות
+                driver.execute_script("window.scrollBy(0, 800);")
+                time.sleep(1)
 
-        print("📜 Scrolling to load all cards...")
-        for _ in range(4): # 4 גלילות קטנות
-            driver.execute_script("window.scrollBy(0, 800);")
-            time.sleep(1)
+            try:
+                WebDriverWait(driver, card_wait).until(
+                    EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
+                )
+                cards_found = True
+                break
+            except TimeoutException:
+                if attempt < empty_retries:
+                    print(f"ℹ️ No results for '{search_term}' (attempt {attempt + 1}/{empty_retries + 1}) — retrying with a fresh proxy IP...")
+                else:
+                    print(f"ℹ️ No results for '{search_term}'")
 
-        try:
-            WebDriverWait(driver, 7).until(
-                EC.presence_of_all_elements_located((By.CSS_SELECTOR, "a.show"))
-            )
-        except TimeoutException:
-            print(f"ℹ️ No results for '{search_term}'")
+        if not cards_found:
             return []
-        
+
         valid_dates = active_dates_map.get(search_term, [])
         normalized_valid_dates = []
         for d in valid_dates:
@@ -629,11 +686,14 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
                 ensure_event_page(driver) # הפונקציה שלך שמטפלת בדפי נחיתה
                 
                 select_area(driver)
-                available = count_empty_seats(driver)
-                
+                available = count_empty_seats(driver, seat_wait)
+
                 show_data["available_seats"] = available
                 found_shows.append(show_data)
-                print(f"✅ Scraped Seats: {show_data['name']} | Date: {show_data['date']} | Seats: {available}")
+                if available is None:
+                    print(f"⚠️ Seat count FAILED — will skip AppSheet update: {show_data['name']} | Date: {show_data['date']}")
+                else:
+                    print(f"✅ Scraped Seats: {show_data['name']} | Date: {show_data['date']} | Seats: {available}")
                 
             except Exception as e:
                 print(f"❌ Error extracting seats for {show_data['url']}: {e}")
@@ -647,36 +707,72 @@ def run_search_logic(driver, base_url, search_term, site_tag, active_dates_map):
 # Main orchestrator function to scrape all targets and update AppSheet
 def scrape_everything():
     short_names, hall_targets, active_dates_map = get_optimized_targets()
-    driver = get_driver()
     all_results = []
 
-    # --- PART 1: The Main Aggregators (Search EVERYTHING) ---
-    main_sites = [
-        {"url": "https://papi.smarticket.co.il/", "tab": "Papi"},
-        {"url": "https://friends.smarticket.co.il/", "tab": "Friends"}
-    ]     
+    proxy_domains = get_proxy_domains()
 
-    for site in main_sites:
-        print(f"🌐 Scraping Aggregator: {site['tab']}")
-        print(f"🌐 Scraping website: {site['url']}")
-        for name in short_names:
-            results = run_search_logic(driver, site['url'], name, site['tab'], active_dates_map)
-            all_results.extend(results)
+    def needs_proxy(url):
+        return (urlparse(url).hostname or "").lower() in proxy_domains
 
-    # --- PART 2: Individual Halls (Search only relevant shows) ---
-    for url, specific_shows in hall_targets.items():
-        print(f"🏛️ Scraping Hall: {url}")
-        for name in specific_shows:
-            # We pass "Hall" as the tab so the update logic knows it's a specific hall
-            results = run_search_logic(driver, url, name, "Hall", active_dates_map)
-            all_results.extend(results)
+    # Build the full work list of (url, tab, [search_names]):
+    #   - Part 1: the two aggregators, searched for every active production
+    #   - Part 2: individual halls, searched for only their relevant shows
+    # "Hall" as the tab tells update_appsheet_batch it's a specific hall.
+    work = [
+        ("https://papi.smarticket.co.il/", "Papi", short_names),
+        ("https://friends.smarticket.co.il/", "Friends", short_names),
+    ]
+    work += [(url, "Hall", names) for url, names in hall_targets.items()]
 
-    # --- PART 3: Batch Update ---
+    # Split by whether the domain is Cloudflare-blocked from datacenter IPs.
+    direct_work = [w for w in work if not needs_proxy(w[0])]
+    proxied_work = [w for w in work if needs_proxy(w[0])]
+
+    def run_targets(driver, targets, card_wait=7, empty_retries=0):
+        for url, tab, names in targets:
+            label = f"Aggregator: {tab}" if tab != "Hall" else f"Hall: {url}"
+            print(f"🌐 Scraping {label}")
+            for name in names:
+                all_results.extend(
+                    run_search_logic(driver, url, name, tab, active_dates_map, card_wait, empty_retries)
+                )
+
+    # --- DIRECT DRIVER: everything not behind the datacenter-IP block ---
+    driver = get_driver()
+    try:
+        run_targets(driver, direct_work)
+    finally:
+        print("🏁 Direct pass finished. Closing browser.")
+        driver.quit()
+
+    # --- PROXIED DRIVER: Cloudflare-blocked domains via IL residential proxy ---
+    # A separate driver instance because SeleniumBase fixes the proxy at launch
+    # time — it can't be switched mid-session.
+    if proxied_work:
+        proxy_address = start_proxy_relay()
+        if proxy_address:
+            hosts = ", ".join(sorted(proxy_domains))
+            print(f"🇮🇱 Routing {len(proxied_work)} target(s) [{hosts}] through residential proxy at {proxy_address}")
+            proxied_driver = get_driver(proxy=proxy_address, block_images=True)
+        else:
+            print("⚠️ Proxy credentials not set (PROXY_USERNAME/PROXY_PASSWORD). "
+                  "Running blocked target(s) WITHOUT proxy — they may be blocked.")
+            proxied_driver = get_driver()
+        try:
+            # Bigger card-wait: residential-proxy latency delays the results
+            # AJAX, so a 7s wait misreads slow loads as "No results".
+            # empty_retries=1: the rotating residential IP occasionally returns an
+            # empty page; one retry gets a fresh IP and recovers it.
+            run_targets(proxied_driver, proxied_work, card_wait=25, empty_retries=1)
+        finally:
+            print("🏁 Proxied pass finished. Closing browser.")
+            proxied_driver.quit()
+
+    # --- BATCH UPDATE ---
     if all_results:
         update_appsheet_batch(all_results)
-    
-    print("🏁 Scraper finished. Closing browser.")
-    driver.quit()
+
+    print("🏁 Scraper finished.")
 
 # Main entry point
 if __name__ == "__main__":
