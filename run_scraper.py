@@ -720,7 +720,7 @@ def scrape_everything():
     # "Hall" as the tab tells update_appsheet_batch it's a specific hall.
     work = [
         ("https://papi.smarticket.co.il/", "Papi", short_names),
-        ("https://friends.smarticket.co.il/", "Friends", short_names),
+        # ("https://friends.smarticket.co.il/", "Friends", short_names),
     ]
     work += [(url, "Hall", names) for url, names in hall_targets.items()]
 
