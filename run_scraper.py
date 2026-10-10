@@ -1,4 +1,5 @@
 import random
+import sys
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -15,10 +16,15 @@ from py_appsheet import AppSheetClient
 from seleniumbase import Driver
 from dotenv import load_dotenv
 from proxy_relay import start_proxy_relay
+from papi_sync_guard import (MISSING, RunReport, VolumeGuard, find_single_match,
+                             safe_int, sold_from_capacity, verify_appsheet_response)
 
 # Load environment variables from a local .env file (no-op in CI, where the
 # variables are provided as real environment/secret values instead).
 load_dotenv()
+
+# הרצת יובש: מחשבת ומדווחת בלי לכתוב ל-AppSheet.
+DRY_RUN = os.getenv("PAPI_DRY_RUN", "").strip().lower() in ("1", "true", "yes")
 
 HEBREW_MONTHS = {
     "ינואר": 1,
@@ -393,13 +399,34 @@ def count_empty_seats(driver, timeout=10):
 
 # Step 3: Update AppSheet with the new availability data using the matched IDs
 def update_appsheet_batch(shows):
-    """Matches scraped shows to AppSheet rows using ID and updates them."""
+    """
+    מתאים את המופעים שנסרקו לשורות ב-AppSheet ומעדכן אותן.
+    מחזיר RunReport. report.ok=False מחייב יציאה בקוד שגיאה.
+    """
     app_id = os.environ.get("APPSHEET_APP_ID")
     app_key = os.environ.get("APPSHEET_APP_KEY")
+
+    report = RunReport("סמארטיקט → AppSheet")
+    report.scraped = len(shows)
+
+    # כלל 4: הגנת נפח לפני כל קריאה או כתיבה. סריקה חלקית או ריקה
+    # אינה הוכחה שהמופעים נעלמו — עוצרים ומתריעים במקום לכתוב.
+    guard = VolumeGuard("smarticket", min_ratio=0.7, min_rows=1)
+    allowed, volume_message = guard.check(report.scraped)
+    print(f"🛡️ {volume_message}")
+    if not allowed:
+        report.error(f"הכתיבה נעצרה בהגנת נפח: {volume_message}")
+        print(report.summary())
+        return report
 
     # 1. Fetch current data to find the IDs
     print("⏳ Fetching current AppSheet data to match IDs...")
     current_rows = get_appsheet_data("הופעות עתידיות")
+
+    if not current_rows:
+        report.error("לא התקבלו רשומות מ-'הופעות עתידיות' — לא נכתב דבר.")
+        print(report.summary())
+        return report
     
     israel_tz = pytz.timezone("Asia/Jerusalem")
     # Format: 2026-03-17 14:09:00
@@ -446,6 +473,7 @@ def update_appsheet_batch(shows):
 
         # 2. Find the ID in AppSheet that matches this show
         match = None
+        all_matches = []
         for row in current_rows:
             app_date_raw = row.get("תאריך")
             # `or ""` guards against a present-but-None value (key exists, value is None),
@@ -476,32 +504,45 @@ def update_appsheet_batch(shows):
             if (name_match) and \
             app_date_obj == scraped_date_obj and \
             row_org == org_value:
-                match = row
-                break
-        
+                # לא לוקחים את ההתאמה הראשונה. אוספים את כולן כדי לזהות עמימות:
+                # שתי שורות תואמות פירושן שהנתון עלול להירשם למופע הלא נכון.
+                all_matches.append(row)
+
+        if len(all_matches) > 1:
+            names = [str(r.get("הפקה", "")).strip() for r in all_matches]
+            print(f"⚠️ התאמה מעורפלת ({len(all_matches)} שורות) עבור {scraped_name} ב-{scraped_date_obj}: {names[:4]} — נפסל.")
+            report.ambiguity(f"{scraped_name} / {scraped_date_obj}",
+                             f"{len(all_matches)} שורות תואמות ב-AppSheet: {names[:4]}")
+            continue
+        match = all_matches[0] if all_matches else None
+
         if not match:
             print(f"❌ No AppSheet match for: {scraped_name} vs {short_name} on {scraped_date_obj} ({org_value})")
+            report.miss(f"{scraped_name} / {scraped_date_obj}", f"ארגון {org_value}, שם מבוקש '{short_name}'")
 
         if match:
             # Calculate 'נמכרו' (Sold) logic
-            try:
-                total_capacity = int(match.get("קיבלו", 0))
-                available = int(show.get("available_seats", 0))
-                sold = total_capacity - available
+            label = f"{scraped_name} / {show.get('hall')} / {scraped_date_obj} ({org_value})"
+            # כלל 1: נתון חסר או חישוב שלילי פוסלים את השורה. לעולם לא כותבים 0
+            # במקום ערך חסר — אפס הוא נתון אמיתי, וכתיבתו מוחקת מידע.
+            sold, reason = sold_from_capacity(match.get("קיבלו"), show.get("available_seats"))
+            if sold is MISSING:
+                print(f"⏩ נפסל ({reason}): {label}")
+                report.skip(label, reason)
+                continue
 
-                if sold < 0:
-                    print(f"⚠️ Warning: Calculated sold tickets is negative for {scraped_name} - {show['hall']}, {scraped_date_obj} ({org_value}) ({match['ID']}). Setting sold to 0.")
-                    sold = 0
+            key_value = match.get("ID")
+            if key_value in (None, ""):
+                report.skip(label, "לשורה התואמת אין ערך בעמודת המפתח 'ID'")
+                continue
 
-                # Add to update list - MUST include the 'ID' key
-                updates.append({
-                    "ID": match["ID"], 
-                    "נמכרו": sold,
-                    "עודכן לאחרונה": now_israel
-                })
-                print(f"✅ Prepared update for {scraped_name}, {show['hall']}, {scraped_date_obj}, ({org_value}) - sold:{sold}, ID {match['ID']}")
-            except Exception as e:
-                print(f"❌ Calculation error for {scraped_name}: {e}")
+            updates.append({
+                "ID": key_value,
+                "נמכרו": sold,
+                "עודכן לאחרונה": now_israel
+            })
+            report.matched += 1
+            print(f"✅ Prepared update for {label} - sold:{sold}, ID {key_value}")
     
     # 3. Send Batch Edit to AppSheet
     if updates:
@@ -516,14 +557,36 @@ def update_appsheet_batch(shows):
             },
             "Rows": updates
         }
-        resp = requests.post(url, json=body, headers={"ApplicationAccessKey": app_key})
-        print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
-        print(f"✅ Successfully updated {num_updates} rows in the 'כרטיסים' table.")
-        if resp.status_code != 200:
-            print(f"🚀 AppSheet Batch Update Status: {resp.status_code}")
-            print(f"❌ AppSheet Update Error: {resp.text}")
+        if DRY_RUN:
+            print(f"🧪 DRY RUN — {num_updates} שורות היו נשלחות. לא נשלח דבר.")
+            print(report.summary())
+            return report
+
+        try:
+            resp = requests.post(url, json=body,
+                                 headers={"ApplicationAccessKey": app_key}, timeout=120)
+        except Exception as exc:
+            report.error(f"בקשת הכתיבה נכשלה: {exc}")
+            print(report.summary())
+            return report
+
+        # כלל 2: הצלחה נקבעת לפי גוף התגובה ומספר השורות שאושרו,
+        # לא לפי קוד HTTP. ה-Action API מחזיר 200 גם כששורות נכשלו.
+        ok, confirmed, detail = verify_appsheet_response(resp, num_updates)
+        report.confirmed = confirmed
+        if ok:
+            print(f"🎉 אושרו {confirmed} שורות בטבלת 'כרטיסים'.")
+            guard.record_success(report.scraped)
+        else:
+            print(f"❌ הכתיבה לא אושרה: {detail}")
+            report.error(f"הכתיבה לא אושרה: {detail}")
     else:
         print("❌ No matching rows found in AppSheet.")
+        if report.scraped and not report.matched:
+            report.error("נסרקו מופעים אך אף אחד לא הותאם — ייתכן שינוי במבנה המקור.")
+
+    print(report.summary())
+    return report
 
 # Detect a Cloudflare "Just a moment" interstitial via the page title.
 def is_cloudflare_challenge(driver):
@@ -769,11 +832,19 @@ def scrape_everything():
             proxied_driver.quit()
 
     # --- BATCH UPDATE ---
+    report = None
     if all_results:
-        update_appsheet_batch(all_results)
+        report = update_appsheet_batch(all_results)
+    else:
+        # סריקה ריקה אינה הוכחה שאין מופעים. נכשלים בקול ולא כותבים דבר.
+        print("❌ הסריקה חזרה ריקה — לא נכתב דבר.")
 
     print("🏁 Scraper finished.")
+    return report
 
 # Main entry point
 if __name__ == "__main__":
-    scrape_everything()
+    final_report = scrape_everything()
+    if final_report is None or not final_report.ok:
+        # יציאה בקוד שגיאה כדי שה-workflow יסומן ככושל ותישלח התראה.
+        sys.exit(1)
