@@ -1,0 +1,40 @@
+name: Offline unit tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Public checkout needs no API token; no repository/environment secrets are used.
+permissions: {}
+
+jobs:
+  offline-tests:
+    name: All 50 offline tests (no credentials or network)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch public test revision without credentials
+        env:
+          TEST_REVISION: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TEST_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          git init .
+          git -c credential.helper= fetch --depth=1 https://github.com/PapiMain/smarticket-scraper.git "$TEST_REVISION"
+          git checkout --detach FETCH_HEAD
+
+      - name: Run both suites with empty environment and no network
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ubuntu-24.04 includes Python 3.12; no pip/browser dependencies needed.
+          python3 --version
+          mkdir -p "$RUNNER_TEMP/offline-home" "$RUNNER_TEMP/offline-tmp"
+          # Drop all inherited env (including tokens); isolate network before tests.
+          # Explicit modules avoid importing the credentialed test_proxy smoke test.
+          sudo unshare --net -- env -i \
+            PATH=/usr/bin:/bin \
+            HOME="$RUNNER_TEMP/offline-home" \
+            TMPDIR="$RUNNER_TEMP/offline-tmp" \
+            python3 -B -m unittest test_papi_sync_guard test_writer_safety -v
