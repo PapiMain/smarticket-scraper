@@ -1,0 +1,73 @@
+name: Offline unit tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Public checkout is anonymous; no application secrets are referenced.
+# GitHub still issues infrastructure credentials (metadata-read token/runtime).
+# They are not passed to the tests. This is accidental-access isolation, not
+# a security boundary for deliberately malicious same-repository code.
+permissions: {}
+
+jobs:
+  offline-tests:
+    name: All 50 offline tests (no credentials or network)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Fetch public test revision without credentials
+        env:
+          TEST_REVISION: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TEST_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          git init .
+          git -c credential.helper= fetch --depth=1 https://github.com/PapiMain/smarticket-scraper.git "$TEST_REVISION"
+          git checkout --detach FETCH_HEAD
+
+      - name: Run all 50 tests as runner user with clean env and no network
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/offline-home" "$RUNNER_TEMP/offline-tmp"
+          runner_uid="$(id -u)"
+          runner_gid="$(id -g)"
+          # Only namespace creation is privileged; Python runs as the runner user.
+          # Drop capabilities and forbid privilege escalation before executing code.
+          sudo unshare --net -- setpriv \
+            --reuid="$runner_uid" --regid="$runner_gid" --clear-groups \
+            --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
+            --no-new-privs -- env -i \
+            PATH=/usr/bin:/bin \
+            HOME="$RUNNER_TEMP/offline-home" \
+            TMPDIR="$RUNNER_TEMP/offline-tmp" \
+            /usr/bin/python3 -B - <<'PY'
+          import os
+          import sys
+          import unittest
+
+          print(f"Interpreter: {sys.executable}; version: {sys.version}", flush=True)
+          if os.geteuid() == 0:
+              raise SystemExit("Refusing to run tests as root")
+          if set(os.environ) - {"PATH", "HOME", "TMPDIR", "LC_CTYPE"}:
+              raise SystemExit("Unexpected inherited environment variables")
+          if os.getgroups():
+              raise SystemExit("Supplementary groups must be empty")
+          print(f"Supplementary groups: {os.getgroups()}", flush=True)
+          print(f"Test uid/gid: {os.geteuid()}/{os.getegid()}; clean environment", flush=True)
+          # Explicit modules avoid the credentialed test_proxy smoke test.
+          suite = unittest.defaultTestLoader.loadTestsFromNames([
+              "test_papi_sync_guard", "test_writer_safety",
+          ])
+          expected = 50
+          if suite.countTestCases() != expected:
+              raise SystemExit(f"Expected {expected} tests; loaded {suite.countTestCases()}")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != expected or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("All 50 tests must pass without skips or expected failures")
+          if not result.wasSuccessful():
+              raise SystemExit(1)
+          PY

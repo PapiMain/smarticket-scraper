@@ -1,9 +1,16 @@
 name: Smarticket Scraper
 
 on:
+  # ⚠️ התזמון הושבת ב-07/09/2026 בקומיט "stopping schedule", בלי נימוק מתועד.
+  #    לא מופעל מחדש לפני שמתברר מדוע הושבת.
   # schedule:
-  #   - cron: "0 0,11 * * *"  
+  #   - cron: "0 0,11 * * *"
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "הרצת יובש — מחשבת ומדווחת בלי לכתוב ל-AppSheet"
+        type: boolean
+        default: true
 
 jobs:
   run-scraper:
@@ -35,6 +42,9 @@ jobs:
       # ubuntu-latest already ships Google Chrome pre-installed, and SeleniumBase
       # UC mode requires real Google Chrome (not the chromium snap) anyway.
 
+      - name: Run unit tests
+        run: python test_papi_sync_guard.py
+
       - name: Run scraper with Xvfb
         env:
           APPSHEET_APP_ID: ${{ secrets.APPSHEET_APP_ID }}
@@ -44,20 +54,27 @@ jobs:
           # since GitHub's datacenter IPs get blocked. Host/port default in code.
           PROXY_USERNAME: ${{ secrets.PROXY_USERNAME }}
           PROXY_PASSWORD: ${{ secrets.PROXY_PASSWORD }}
+          PAPI_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '' }}
+          # ⚠️ ראה ההערה ב-bravo.yml: בלי אחסון מתמיד אין הגנת ירידה חדה.
+          PAPI_STATE_PATH: ${{ vars.PAPI_STATE_PATH }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python run_scraper.py
+      # ⚠️ מאגר ציבורי: artifacts ניתנים להורדה על ידי כל אחד. צילום מסך
+      #    שתפס דף של חשבון מחובר הוא חשיפה. מועלה רק בכשל, ולזמן קצר.
       - name: Upload screenshots
-        if: always() # Ensure this runs even if the scraper fails
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: smarticket-screenshots
           path: screenshots/
-          retention-days: 7
+          retention-days: 1
 
   keepalive:
     runs-on: ubuntu-latest
     needs: run-scraper
-    if: ${{ github.event_name == 'schedule' }} # only run automatically, not on manual trigger
+    # always(): חייב לרוץ גם בכשל — אחרת דווקא כשהסקרייפר שבור,
+    # GitHub מכבה את ה-workflow בשקט אחרי 60 יום.
+    if: ${{ always() && github.event_name == 'schedule' }}
     permissions:
       contents: write
     steps:
