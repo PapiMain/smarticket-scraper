@@ -150,6 +150,43 @@ class TestResponseVerification(unittest.TestCase):
         self.assertIn("500", detail)
 
 
+    def test_valid_list_variant(self):
+        self.assertEqual(verify_appsheet_response(FakeResponse(200, [{"ID": 1}]), 1),
+                         (True, 1, ""))
+
+    def test_invalid_containers_and_items(self):
+        for payload in ("secret", 1, True, {"Rows": "secret"}, {"Rows": {}},
+                        {"Rows": None}, {"Rows": 1}, {"Rows": ["secret"]},
+                        [None], [1], [{}, "secret"]):
+            with self.subTest(payload=payload):
+                ok, confirmed, detail = verify_appsheet_response(FakeResponse(200, payload), 1)
+                self.assertFalse(ok)
+                self.assertEqual(confirmed, 0)
+                self.assertNotIn("secret", detail)
+
+    def test_invalid_sent_count(self):
+        for count in (True, False, 0, -1, 1.0, "1", None):
+            with self.subTest(count=count):
+                ok, confirmed, detail = verify_appsheet_response(FakeResponse(200, [{}]), count)
+                self.assertFalse(ok)
+                self.assertEqual(confirmed, 0)
+
+    def test_server_payload_and_exception_text_never_leak(self):
+        class BrokenResponse:
+            status_code = 200
+            @property
+            def text(self):
+                raise AssertionError("body must never be accessed")
+            def json(self):
+                raise ValueError("secret")
+        for response in (BrokenResponse(), FakeResponse(500, {"secret": "secret"}, "secret"),
+                         FakeResponse(200, {"secret": "secret"})):
+            ok, confirmed, detail = verify_appsheet_response(response, 1)
+            self.assertFalse(ok)
+            self.assertEqual(confirmed, 0)
+            self.assertNotIn("secret", detail)
+
+
 class TestVolumeGuard(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

@@ -17,7 +17,8 @@ from seleniumbase import Driver
 from dotenv import load_dotenv
 from proxy_relay import start_proxy_relay
 from papi_sync_guard import (MISSING, RunReport, VolumeGuard, find_single_match,
-                             safe_int, sold_from_capacity, verify_appsheet_response)
+                             safe_int, sold_from_capacity, verify_appsheet_response,
+                             titles_match, normalize_title)
 
 # Load environment variables from a local .env file (no-op in CI, where the
 # variables are provided as real environment/secret values instead).
@@ -434,16 +435,19 @@ def update_appsheet_batch(shows):
 
     exclude_words = ["סוואנה", "אפריקה", "הפקת הענק"]
 
-    updates = []
+    candidates = {}
     for show in shows:
         try:
             scraped_date_obj = datetime.strptime(show["date"], "%d/%m/%Y").date()
         except:
             continue
 
-        scraped_name = show["name"].strip()
+        scraped_name = (show.get("name") or "").strip()
+        short_name = (show.get("searched_name") or "").strip()
+        if not scraped_name or not short_name:
+            report.skip("missing name", "Scraped and searched names are required")
+            continue
         clean_scraped_name = " ".join(scraped_name.replace("–", "-").replace(".", "").split()).lower()
-        short_name = show["searched_name"].strip() # נשתמש בשם המקוצר שהעברנו בפונקציה הראשית, כי הוא זה שמופיע באירועים העתידיים
 
         # Skip rows whose seat count failed (None). Writing them would compute
         # sold = capacity - 0 and record a false sold-out; leave the last good value.
@@ -493,8 +497,7 @@ def update_appsheet_batch(shows):
             # Comparison (Name + Date + Org)
             row_org = (row.get("ארגון") or "").strip()
 
-            name_match = (short_name.lower() in app_row_name) or \
-                         (app_row_name in short_name.lower())
+            name_match = titles_match(scraped_name, app_row_name)
             
             if "סימבה" in clean_scraped_name or "פיטר פן" in clean_scraped_name:
                 if any(word in clean_scraped_name for word in exclude_words):
@@ -536,14 +539,26 @@ def update_appsheet_batch(shows):
                 report.skip(label, "לשורה התואמת אין ערך בעמודת המפתח 'ID'")
                 continue
 
-            updates.append({
-                "ID": key_value,
-                "נמכרו": sold,
-                "עודכן לאחרונה": now_israel
-            })
-            report.matched += 1
-            print(f"✅ Prepared update for {label} - sold:{sold}, ID {key_value}")
-    
+            source_url = (show.get("url") or "").strip()
+            identity = (
+                source_url, normalize_title(show.get("name")), scraped_date_obj,
+                normalize_title(show.get("time")), normalize_title(show.get("hall")),
+                normalize_title(org_value), sold,
+            )
+            update = {"ID": key_value, "נמכרו": sold,
+                      "עודכן לאחרונה": now_israel}
+            candidates.setdefault(key_value, []).append((identity, update))
+
+    updates = []
+    for key_value, observations in candidates.items():
+        identity = observations[0][0]
+        if (not identity[0] or
+                any(observed != identity for observed, _ in observations)):
+            report.ambiguity(str(key_value), "Missing source URL or conflicting observations for ID")
+            continue
+        updates.append(observations[0][1])
+    report.matched = len(updates)
+
     # 3. Send Batch Edit to AppSheet
     if updates:
         num_updates = len(updates)

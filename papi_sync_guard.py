@@ -153,25 +153,23 @@ def verify_appsheet_response(response, sent_count):
     ולכן קוד הסטטוס לבדו אינו עדות. נבדק גוף התגובה ומספר
     השורות שחזרו מאושרות.
     """
+    if type(sent_count) is not int or sent_count <= 0:
+        return False, 0, "Invalid sent_count"
     status = getattr(response, "status_code", None)
     if status != 200:
-        body = (getattr(response, "text", "") or "")[:500]
-        return False, 0, f"HTTP {status}: {body}"
+        detail = f"HTTP {status}" if type(status) is int else "Invalid HTTP status"
+        return False, 0, detail
 
     try:
         payload = response.json()
     except Exception:
-        body = (getattr(response, "text", "") or "")[:500]
-        return False, 0, f"תגובה שאינה JSON: {body}"
+        return False, 0, "Invalid JSON response"
 
-    rows = None
-    if isinstance(payload, dict):
-        rows = payload.get("Rows")
-    elif isinstance(payload, list):
-        rows = payload
-
-    if rows is None:
-        return False, 0, f"בתגובה אין שדה Rows: {str(payload)[:300]}"
+    rows = payload.get("Rows") if isinstance(payload, dict) else payload
+    if not isinstance(rows, list):
+        return False, 0, "Invalid Rows container"
+    if any(not isinstance(row, dict) for row in rows):
+        return False, 0, "Invalid Rows item"
 
     confirmed = len(rows)
     if confirmed != sent_count:
