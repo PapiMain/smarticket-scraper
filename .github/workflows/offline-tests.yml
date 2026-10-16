@@ -37,7 +37,7 @@ jobs:
           # Only namespace creation is privileged; Python runs as the runner user.
           # Drop capabilities and forbid privilege escalation before executing code.
           sudo unshare --net -- setpriv \
-            --reuid="$runner_uid" --regid="$runner_gid" --init-groups \
+            --reuid="$runner_uid" --regid="$runner_gid" --clear-groups \
             --bounding-set=-all --inh-caps=-all --ambient-caps=-all \
             --no-new-privs -- env -i \
             PATH=/usr/bin:/bin \
@@ -53,6 +53,9 @@ jobs:
               raise SystemExit("Refusing to run tests as root")
           if set(os.environ) - {"PATH", "HOME", "TMPDIR", "LC_CTYPE"}:
               raise SystemExit("Unexpected inherited environment variables")
+          if os.getgroups():
+              raise SystemExit("Supplementary groups must be empty")
+          print(f"Supplementary groups: {os.getgroups()}", flush=True)
           print(f"Test uid/gid: {os.geteuid()}/{os.getegid()}; clean environment", flush=True)
           # Explicit modules avoid the credentialed test_proxy smoke test.
           suite = unittest.defaultTestLoader.loadTestsFromNames([
@@ -62,8 +65,9 @@ jobs:
           if suite.countTestCases() != expected:
               raise SystemExit(f"Expected {expected} tests; loaded {suite.countTestCases()}")
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if result.testsRun != expected or result.skipped:
-              raise SystemExit("All 50 tests must run without skips")
+          if (result.testsRun != expected or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("All 50 tests must pass without skips or expected failures")
           if not result.wasSuccessful():
               raise SystemExit(1)
           PY
